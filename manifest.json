@@ -1,0 +1,97 @@
+{
+  "schemaVersion": 1,
+  "id": "minholi.kindle",
+  "name": "Kindle",
+  "version": "1.0.0",
+  "author": "Marcelo Minholi",
+  "license": "MIT",
+  "description": "Your Kindle library, reading progress, and highlights in the Omarchy bar. Read-only, unofficial, backed by your own read.amazon.com session.",
+  "kinds": [
+    "service",
+    "bar-widget",
+    "panel"
+  ],
+  "activation": "on-demand",
+  "entryPoints": {
+    "service": "Service.qml",
+    "barWidget": "BarWidget.qml",
+    "panel": "Panel.qml"
+  },
+  "barWidget": {
+    "displayName": "Kindle",
+    "description": "Currently reading, library, and highlights from read.amazon.com. Requires a one-time cookie setup in settings.",
+    "category": "Media",
+    "aliases": [
+      "kindle",
+      "books",
+      "reading",
+      "library"
+    ],
+    "allowMultiple": false,
+    "defaultSection": "left",
+    "defaults": {
+      "region": "us",
+      "refreshMinutes": 30,
+      "barStyle": "Cover only",
+      "showProgress": "On"
+    },
+    "schema": [
+      {
+        "key": "region",
+        "type": "enum",
+        "label": "Amazon region",
+        "description": "The Amazon store your Kindle account belongs to. Changing it requires signing in to the matching read.amazon.<region> site and pasting fresh cookies.",
+        "options": [
+          "us",
+          "uk",
+          "de",
+          "fr",
+          "it",
+          "es",
+          "jp",
+          "ca",
+          "au",
+          "in",
+          "br",
+          "mx",
+          "nl"
+        ],
+        "defaultValue": "us"
+      },
+      {
+        "key": "refreshMinutes",
+        "type": "integer",
+        "label": "Progress refresh",
+        "min": 5,
+        "max": 240,
+        "step": 5,
+        "defaultValue": 30,
+        "description": "Minutes between reading-progress checks. Kindle syncs progress from your device, so faster polling rarely shows anything new."
+      },
+      {
+        "key": "barStyle",
+        "type": "enum",
+        "label": "Bar widget shows",
+        "options": [
+          "Cover only",
+          "Cover and title",
+          "Title only",
+          "Icon only"
+        ],
+        "defaultValue": "Cover only",
+        "description": "Cover only keeps the bar to the current book's cover. Cover and title adds the title and percent read. Title only drops the cover. Icon only keeps the bar quiet until you open the panel."
+      },
+      {
+        "key": "showProgress",
+        "type": "enum",
+        "label": "Show percent read",
+        "options": [
+          "On",
+          "Off"
+        ],
+        "defaultValue": "On",
+        "description": "Show the reading percentage next to the title. Only applies to Cover and title and Title only."
+      }
+    ]
+  }
+}

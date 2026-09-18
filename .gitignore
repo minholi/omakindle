@@ -1,0 +1,5 @@
+backend/target/
+__pycache__/
+*.pyc
+.venv/
+*.qmlc

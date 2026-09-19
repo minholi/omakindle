@@ -46,6 +46,7 @@ Item {
   property bool authHasToken: false
 
   signal authFinished(bool ok, bool hasToken, string message)
+  signal highlightsUpdated(string asin, var highlights)
 
   function localSourceDir() {
     var dir = String(Qt.resolvedUrl("."))
@@ -60,8 +61,28 @@ Item {
     return client.sendCommand("refresh", null, null)
   }
 
-  function getHighlights(asin, callback) {
-    return client.sendCommand("get_highlights", { asin: String(asin || "") }, callback)
+  function getHighlights(asin, force, callback) {
+    return client.sendCommand("get_highlights", {
+      asin: String(asin || ""),
+      force: force === true,
+      enrich: true
+    }, callback)
+  }
+
+  function getHighlightText(asin, start, end, callback) {
+    return client.sendCommand("get_highlight_text", {
+      asin: String(asin || ""),
+      start: Number(start),
+      end: Number(end)
+    }, callback)
+  }
+
+  function getRecentHighlights(limit, perBook, force, callback) {
+    return client.sendCommand("get_recent_highlights", {
+      limit: Number(limit) || 8,
+      perBook: Number(perBook) || 4,
+      force: force === true
+    }, callback)
   }
 
   function setCredentials(cookies, deviceToken, region, callback) {
@@ -133,6 +154,9 @@ Item {
   BackendClient {
     id: client
     wanted: true
+    onHighlightsReceived: function(asin, highlights) {
+      root.highlightsUpdated(asin, highlights)
+    }
   }
 
   Process {

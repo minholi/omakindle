@@ -35,6 +35,12 @@ and a `state_changed` event whenever the state changes:
 {"type":"event","v":1,"event":"state_changed","state":{}}
 ```
 
+and a `highlights_changed` event after a background refresh finishes:
+
+```json
+{"type":"event","v":1,"event":"highlights_changed","asin":"B000000000","highlights":{}}
+```
+
 ## State
 
 The snapshot contains:
@@ -50,8 +56,8 @@ The snapshot contains:
 - `updatedAt`: Unix seconds of the last successful refresh
 - `refreshing`: true while a refresh is running
 - `needsDeviceToken`: true when the stored session has cookies but no device
-  token; the library and highlights work, progress is skipped until the token
-  is stored
+  token; the library works without it, but progress and highlights need the
+  token and report `needs_device_token` until it is stored
 
 ## Commands
 
@@ -68,15 +74,30 @@ The snapshot contains:
   registers the device, and refreshes
 - `clear_credentials`
 - `set_refresh_minutes` with `minutes` from 5 through 1440
-- `get_highlights` with `asin`; returns `highlights` with `asin`, `count`,
-  `limited` (Amazon truncates the web notebook), and `items` (`id`, `text`,
-  `note`, `color`, `location`, `page`)
+- `get_highlights` with `asin`, optional `force`, and optional `enrich`; returns
+  `highlights` with `asin`, `count`, `limited` (some items are still previews),
+  and `items` (`id`, `text`, `note`, `color`, `location`, `positionType`,
+  `start`, `end`, `truncated`, `verified`, `modifiedAt`), plus `cached`,
+  `stale`, and `fetchedAt`. Responses are cached for 30 minutes; a stale cache
+  is returned immediately and refreshed in the background. With `enrich`, the
+  backend also fetches full text for truncated items in the background and
+  emits `highlights_changed` as the cache improves. `verified` marks text that
+  came from the copy API rather than a preview
+- `get_highlight_text` with `asin`, `start`, and `end`; returns `text`, the
+  full passage for a highlight through the reader copy API. Cached verified
+  text is served directly; anything else is fetched and verified first
+- `get_recent_highlights` with optional `limit` (default 8), `perBook`
+  (default 4), and `force`; scans recent books server-side, returns
+  `items` (highlights decorated with `bookAsin`, `bookTitle`, `bookAuthors`)
+  and `scanned`
 
 ## Error codes
 
 - `unconfigured` — no session stored yet
 - `invalid_credentials` — cookies or device token were rejected
 - `auth_expired` — the stored session was signed out
+- `needs_device_token` — stored session has cookies but no device token
+- `unavailable` — Amazon refuses to provide reading data for this book
 - `session_error` — the session file could not be read or written
 - `busy` — a refresh is already running
 - `network`, `parse`, `amazon_<status>` — transport, parsing, or Amazon failure
@@ -90,7 +111,17 @@ The snapshot contains:
 - Requests use a Chrome 149 macOS TLS/HTTP2 profile because Amazon rejects
   clients whose fingerprint does not look like a browser. The client is
   pinned to `wreq` and `wreq-util`.
+- Highlights come from the Cloud Reader annotations API
+  (`/service/mobile/reader/getAnnotations`), not the web notebook page:
+  Amazon now requires a recent password login for
+  `read.amazon.com/notebook`, which a background daemon cannot satisfy.
+  Annotations carry a short preview for long highlights; the reader copy API
+  (`/service/mobile/reader/copyText`) returns the full passage and is used to
+  enrich cached highlights and to serve `get_highlight_text`.
 - The backend refreshes on demand, on a timer (`set_refresh_minutes`), and on
   startup when credentials exist. It keeps its last successful state in
-  `~/.cache/omakindle/state.json` so the bar has something to show
+  `~/.cache/omakindle/state.json` and cached highlights in
+  `~/.cache/omakindle/annotations.json` so the bar has something to show
   immediately after a restart.
+- Cookies rotated by Amazon are written back to the stored session after
+  every successful refresh.

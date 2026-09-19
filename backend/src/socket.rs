@@ -27,6 +27,18 @@ struct Request {
     asin: Option<String>,
     #[serde(default)]
     minutes: Option<u64>,
+    #[serde(default)]
+    force: Option<bool>,
+    #[serde(default)]
+    enrich: Option<bool>,
+    #[serde(default)]
+    start: Option<i64>,
+    #[serde(default)]
+    end: Option<i64>,
+    #[serde(default)]
+    limit: Option<usize>,
+    #[serde(default, rename = "perBook")]
+    per_book: Option<usize>,
 }
 
 fn default_version() -> u8 {
@@ -66,11 +78,17 @@ pub async fn serve(app: Arc<App>, path: &Path) -> std::io::Result<()> {
                 }
             }
         }
-        let mut ticker = tokio::time::interval(std::time::Duration::from_secs(15 * 60));
+        let mut ticker = tokio::time::interval(std::time::Duration::from_secs(30));
         ticker.tick().await;
+        let mut elapsed: u64 = 0;
         loop {
             ticker.tick().await;
-            let _ = refresh_app.refresh().await;
+            elapsed += 30;
+            let minutes = refresh_app.refresh_minutes();
+            if elapsed >= minutes.saturating_mul(60) {
+                elapsed = 0;
+                let _ = refresh_app.refresh().await;
+            }
         }
     });
 
@@ -232,8 +250,40 @@ async fn dispatch(app: &Arc<App>, line: &str) -> String {
             if asin.is_empty() {
                 return error_response(id, "bad_request", "asin is required");
             }
-            match app.highlights(&asin).await {
-                Ok(highlights) => success(id, json!({ "highlights": highlights })),
+            let force = request.force.unwrap_or(false);
+            let enrich = request.enrich.unwrap_or(false);
+            match app.highlights(&asin, force, enrich).await {
+                Ok(result) => success(
+                    id,
+                    json!({
+                        "highlights": result.highlights,
+                        "cached": result.cached,
+                        "stale": result.stale,
+                        "fetchedAt": result.fetched_at,
+                    }),
+                ),
+                Err((code, message)) => error_response(id, &code, &message),
+            }
+        }
+        "get_recent_highlights" => {
+            let limit = request.limit.unwrap_or(8);
+            let per_book = request.per_book.unwrap_or(4);
+            let force = request.force.unwrap_or(false);
+            match app.recent_highlights(limit, per_book, force).await {
+                Ok(result) => success(id, result),
+                Err((code, message)) => error_response(id, &code, &message),
+            }
+        }
+        "get_highlight_text" => {
+            let asin = request.asin.unwrap_or_default();
+            if asin.is_empty() {
+                return error_response(id, "bad_request", "asin is required");
+            }
+            let (Some(start), Some(end)) = (request.start, request.end) else {
+                return error_response(id, "bad_request", "start and end are required");
+            };
+            match app.highlight_text(&asin, start, end).await {
+                Ok(text) => success(id, json!({ "text": text })),
                 Err((code, message)) => error_response(id, &code, &message),
             }
         }

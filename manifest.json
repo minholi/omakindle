@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "minholi.kindle",
   "name": "Kindle",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "author": "Marcelo Minholi",
   "license": "MIT",
   "description": "Your Kindle library, reading progress, and highlights in the Omarchy bar. Read-only, unofficial, backed by your own read.amazon.com session.",

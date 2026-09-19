@@ -80,14 +80,19 @@ bulk endpoint for it.
 - **Highlights** — opened without a book selected, it scans recent books and
   shows a selection of quotes across them; picking a book (or "Quotes" on a
   row) shows that book's highlights with color, location, notes, and a copy
-  button that appends the author and title citation.
+  button that appends the author and title citation. Results are cached in
+  the backend for 30 minutes and refreshed in the background.
 - **Settings** — session, region, and refresh interval.
 
 ## Caveats
 
 - Unofficial API: read-only, personal use. Using it may violate Amazon's terms.
-- Amazon truncates the web notebook for some books, so a few highlights may
-  only exist in the Kindle app. The panel says when this applies.
+- Highlights come from the Cloud Reader annotations API and are cached for
+  30 minutes. Amazon returns a short preview for long highlights; the plugin
+  fetches the full passage in the background (and when you press Copy). If
+  Amazon refuses to serve a book, the quote stays a preview marked with "…".
+- Amazon's web notebook page now requires a recent password login, so the
+  plugin does not use it; bookmarks are skipped and pages are not shown.
 - Book text is DRM-protected; the plugin only reads metadata, covers, progress,
   and your own annotations.
 - Cookies expire after roughly a year or when Amazon signs the session out.

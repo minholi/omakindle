@@ -21,18 +21,36 @@ pub struct Progress {
 }
 
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Highlight {
+    #[serde(default)]
     pub id: Option<String>,
+    #[serde(default)]
     pub text: String,
+    #[serde(default)]
     pub note: Option<String>,
+    #[serde(default)]
     pub color: Option<String>,
+    #[serde(default)]
     pub location: Option<String>,
+    #[serde(default)]
     pub page: Option<i64>,
+    #[serde(default)]
+    pub position_type: Option<String>,
+    #[serde(default)]
+    pub start: Option<i64>,
+    #[serde(default)]
+    pub end: Option<i64>,
+    #[serde(default)]
+    pub truncated: bool,
+    #[serde(default)]
+    pub verified: bool,
+    #[serde(default)]
+    pub modified_at: Option<i64>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Highlights {
     pub asin: String,
@@ -105,8 +123,12 @@ pub struct StartReading {
     pub is_sample: bool,
     #[serde(default)]
     pub format_version: String,
+    #[serde(default, rename = "YJFormatVersion")]
+    pub yj_format_version: String,
     #[serde(default)]
     pub metadata_url: String,
+    #[serde(default)]
+    pub content_version: String,
     #[serde(default)]
     pub srl: Option<i64>,
     #[serde(default)]

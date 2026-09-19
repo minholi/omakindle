@@ -28,6 +28,7 @@ Item {
   }
 
   signal stateReceived(var state)
+  signal highlightsReceived(string asin, var highlights)
 
   function resetPending(reason) {
     var waiters = pending
@@ -71,7 +72,9 @@ Item {
     var message = Api.parseJson(line, null)
     if (!message || typeof message !== "object") return
     if (message.type === "snapshot" || message.type === "event") {
-      applyState(message.state)
+      if (message.state) applyState(message.state)
+      if (message.event === "highlights_changed" && message.highlights)
+        highlightsReceived(String(message.asin || ""), message.highlights)
       return
     }
     if (message.type !== "response") return

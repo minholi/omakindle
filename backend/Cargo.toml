@@ -11,7 +11,6 @@ anyhow = "1"
 clap = { version = "4.5", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-scraper = "0.24"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 wreq = { version = "0.16", features = ["cookies", "gzip", "brotli", "deflate", "zstd"] }
 wreq-util = "0.2"

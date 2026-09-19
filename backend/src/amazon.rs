@@ -1,6 +1,7 @@
 use std::fmt;
 use std::time::Duration;
 
+use serde::Deserialize;
 use wreq::header::{HeaderMap, HeaderValue};
 use wreq_util::{Emulation, Platform, Profile};
 
@@ -33,6 +34,20 @@ pub enum Error {
     Http(String),
     Amazon { status: u16, message: String },
     Parse(String),
+}
+
+pub struct Annotations {
+    pub highlights: Highlights,
+    pub guid: String,
+    pub revision: String,
+}
+
+#[derive(Deserialize)]
+struct CopyTextResponse {
+    #[serde(default)]
+    status: Option<String>,
+    #[serde(default)]
+    text: String,
 }
 
 impl fmt::Display for Error {
@@ -185,10 +200,31 @@ impl Amazon {
     }
 
     async fn get(&mut self, url: &str, adp: bool) -> Result<(u16, HeaderMap, String, String), Error> {
-        let headers = self.headers(adp)?;
-        let response = self
+        let request = self.client.get(url);
+        self.send(request, adp).await
+    }
+
+    async fn post_json(
+        &mut self,
+        url: &str,
+        body: &serde_json::Value,
+    ) -> Result<(u16, HeaderMap, String, String), Error> {
+        let payload = serde_json::to_string(body).map_err(|error| Error::Parse(error.to_string()))?;
+        let request = self
             .client
-            .get(url)
+            .post(url)
+            .header(wreq::header::CONTENT_TYPE, "application/json")
+            .body(payload);
+        self.send(request, true).await
+    }
+
+    async fn send(
+        &mut self,
+        request: wreq::RequestBuilder,
+        adp: bool,
+    ) -> Result<(u16, HeaderMap, String, String), Error> {
+        let headers = self.headers(adp)?;
+        let response = request
             .headers(headers)
             .send()
             .await
@@ -330,14 +366,98 @@ impl Amazon {
         Ok((fraction * 1000.0).round() / 10.0)
     }
 
+    pub async fn annotations(&mut self, asin: &str) -> Result<Annotations, Error> {
+        if self.adp_session_token.is_empty() {
+            self.register_device().await?;
+        }
+        let start = self.start_reading(asin).await?;
+        let guid = if !start.yj_format_version.trim().is_empty() {
+            start.yj_format_version.trim().to_string()
+        } else {
+            start.format_version.trim().to_string()
+        };
+        let revision = start.content_version.trim().to_string();
+        if guid.is_empty() {
+            return Ok(Annotations {
+                highlights: Highlights {
+                    asin: asin.to_string(),
+                    count: 0,
+                    limited: false,
+                    items: Vec::new(),
+                },
+                guid,
+                revision,
+            });
+        }
+        let highlights = match self.fetch_annotations(asin, &guid).await {
+            Err(Error::Amazon { status: 500, .. }) => {
+                let repeated = format!("{guid},{guid}");
+                self.fetch_annotations(asin, &repeated).await?
+            }
+            other => other?,
+        };
+        Ok(Annotations {
+            highlights,
+            guid,
+            revision,
+        })
+    }
+
     pub async fn highlights(&mut self, asin: &str) -> Result<Highlights, Error> {
+        Ok(self.annotations(asin).await?.highlights)
+    }
+
+    /// Fetch the full text for a position range through the reader's copy API.
+    pub async fn copy_text(
+        &mut self,
+        asin: &str,
+        guid: &str,
+        revision: &str,
+        start: i64,
+        end: i64,
+    ) -> Result<String, Error> {
+        if self.adp_session_token.is_empty() {
+            self.register_device().await?;
+        }
+        let url = format!("{}/service/mobile/reader/copyText", self.base);
+        let body = serde_json::json!({
+            "asin": asin,
+            "startPosition": start,
+            "endPosition": end,
+            "guid": guid,
+            "revision": revision,
+            "clientVersion": "20000100",
+        });
+        let (_, _, _, payload) = self.post_json(&url, &body).await?;
+        let parsed: CopyTextResponse = serde_json::from_str(&payload)
+            .map_err(|error| Error::Parse(format!("copyText response: {error}")))?;
+        if parsed.status.as_deref() != Some("Ok") || parsed.text.trim().is_empty() {
+            return Err(Error::Parse(format!(
+                "copyText status: {}",
+                parsed.status.unwrap_or_else(|| "missing".into())
+            )));
+        }
+        Ok(parsed.text)
+    }
+
+    async fn fetch_annotations(&mut self, asin: &str, guid: &str) -> Result<Highlights, Error> {
         let url = format!(
-            "{}/notebook?asin={}&contentLimitState=",
+            "{}/service/mobile/reader/getAnnotations?asin={}&guid={}&clientVersion=20000100",
             self.base,
-            urlencode(asin)
+            urlencode(asin),
+            urlencode(guid)
         );
-        let (_, _, _, body) = self.get(&url, false).await?;
-        Ok(highlights::parse(asin, &body))
+        let (_, _, _, body) = self.get(&url, true).await?;
+        highlights::parse(asin, &body)
+            .map_err(|error| Error::Parse(format!("annotations response: {error}")))
+    }
+
+    pub fn cookies(&self) -> String {
+        self.credentials.cookie_header()
+    }
+
+    pub fn device_token(&self) -> &str {
+        &self.credentials.device_token
     }
 }
 

@@ -37,18 +37,17 @@ Panel {
   property string highlightsTitle: ""
   property string highlightsAuthors: ""
   property bool highlightsLoading: false
+  property bool highlightsUpdating: false
   property string highlightsError: ""
   property bool settingsMode: false
   property var copiedItem: null
+  property var copyingItem: null
 
-  property int recentToken: 0
   property bool recentLoading: false
   property int recentScanned: 0
   property var recentHighlights: []
-  property var highlightCache: ({})
   readonly property int recentPerBook: 4
   readonly property int recentTargetQuotes: 8
-  readonly property int recentScanCap: 12
   readonly property bool recentMode: highlightsAsin === ""
   readonly property var displayedHighlights: {
     if (!recentMode) return highlights && highlights.items ? highlights.items : []
@@ -106,7 +105,7 @@ Panel {
   function refresh() {
     if (!kindle) return
     if (tab === 2 && !settingsMode) {
-      if (recentMode) loadRecentHighlights()
+      if (recentMode) loadRecentHighlights(true)
       else reloadHighlights()
     }
     kindle.refresh()
@@ -115,8 +114,9 @@ Panel {
   function reloadHighlights() {
     if (!kindle || highlightsAsin === "") return
     highlightsLoading = true
+    highlightsUpdating = false
     highlightsError = ""
-    kindle.getHighlights(highlightsAsin, function(ok, result, code, message) {
+    kindle.getHighlights(highlightsAsin, true, function(ok, result, code, message) {
       highlightsLoading = false
       if (ok && result && result.highlights) highlights = result.highlights
       else highlightsError = message || "Could not load highlights"
@@ -129,7 +129,6 @@ Panel {
 
   function loadHighlights(book) {
     if (!kindle || !book) return
-    recentToken++
     recentLoading = false
     tab = 2
     highlightsAsin = String(book.asin || "")
@@ -138,66 +137,20 @@ Panel {
     highlights = null
     highlightsError = ""
     highlightsLoading = true
-    kindle.getHighlights(book.asin, function(ok, result, code, message) {
+    highlightsUpdating = false
+    kindle.getHighlights(book.asin, false, function(ok, result, code, message) {
       highlightsLoading = false
-      if (ok && result && result.highlights) highlights = result.highlights
-      else highlightsError = message || "Could not load highlights"
+      if (ok && result && result.highlights) {
+        highlights = result.highlights
+        highlightsUpdating = result.stale === true
+      } else {
+        highlightsError = message || "Could not load highlights"
+      }
     })
   }
 
-  function recentCandidates() {
-    var out = []
-    var seen = ({})
-    var index
-    for (index = 0; index < reading.length; index++) {
-      var book = reading[index]
-      if (book && book.asin && !seen[book.asin]) {
-        seen[book.asin] = true
-        out.push(book)
-      }
-    }
-    for (index = 0; index < books.length; index++) {
-      var candidate = books[index]
-      if (candidate && candidate.asin && !seen[candidate.asin]) {
-        seen[candidate.asin] = true
-        out.push(candidate)
-      }
-    }
-    return out
-  }
-
-  function mergeRecent(book, items) {
-    var merged = recentHighlights.slice()
-    for (var itemIndex = 0; itemIndex < items.length; itemIndex++) {
-      var item = items[itemIndex]
-      item.bookAsin = book.asin
-      item.bookTitle = book.title
-      item.bookAuthors = (book.authors || []).join(", ")
-      merged.push(item)
-    }
-    recentHighlights = merged
-  }
-
-  function cacheHighlight(asin, items) {
-    var cache = ({})
-    for (var key in highlightCache) cache[key] = highlightCache[key]
-    cache[asin] = items
-    highlightCache = cache
-  }
-
-  function scheduleRecent(candidates, index, token, strike, delay) {
-    recentStepTimer.candidates = candidates
-    recentStepTimer.index = index
-    recentStepTimer.token = token
-    recentStepTimer.strike = strike
-    recentStepTimer.interval = delay
-    recentStepTimer.restart()
-  }
-
-  function loadRecentHighlights() {
+  function loadRecentHighlights(force) {
     if (!kindle) return
-    recentToken++
-    var token = recentToken
     highlightsAsin = ""
     highlightsTitle = ""
     highlights = null
@@ -205,46 +158,21 @@ Panel {
     recentHighlights = []
     recentScanned = 0
     recentLoading = true
-    scheduleRecent(recentCandidates(), 0, token, 0, 0)
-  }
-
-  function fetchRecentAt(candidates, index, token, strike) {
-    if (token !== recentToken) return
-    if (!kindle || index >= candidates.length || index >= recentScanCap
-        || recentHighlights.length >= recentTargetQuotes) {
-      recentLoading = false
-      return
-    }
-    var book = candidates[index]
-    var cached = highlightCache[book.asin]
-    if (cached !== undefined) {
-      recentScanned++
-      mergeRecent(book, cached)
-      scheduleRecent(candidates, index + 1, token, 0, 300)
-      return
-    }
-    kindle.getHighlights(book.asin, function(ok, result, code, message) {
-      if (token !== recentToken) return
-      var items = (ok && result && result.highlights && result.highlights.items)
-        ? result.highlights.items.slice(0, recentPerBook) : []
-      if (items.length === 0 && strike === 0) {
-        scheduleRecent(candidates, index, token, 1, 800)
-        return
-      }
-      cacheHighlight(book.asin, items)
-      recentScanned++
-      if (items.length > 0) mergeRecent(book, items)
-      scheduleRecent(candidates, index + 1, token, 0, 400)
-    })
+    kindle.getRecentHighlights(recentTargetQuotes, recentPerBook, force === true,
+      function(ok, result, code, message) {
+        recentLoading = false
+        if (ok && result) {
+          recentHighlights = result.items || []
+          recentScanned = Number(result.scanned || 0)
+        }
+      })
   }
 
   function copyText(text) {
     if (text) Quickshell.execDetached(["wl-copy", String(text)])
   }
 
-  function copyQuote(item) {
-    if (!item) return
-    var quote = String(item.text || "")
+  function finishCopy(item, quote) {
     var author = String(item.bookAuthors || root.highlightsAuthors || "")
     var title = String(item.bookTitle || root.highlightsTitle || "")
     var citation = author !== "" && title !== "" ? author + ", " + title
@@ -253,7 +181,25 @@ Panel {
     if (citation !== "") payload += "\n\n— " + citation
     copyText(payload)
     copiedItem = item
+    copyingItem = null
     copiedTimer.restart()
+  }
+
+  function copyQuote(item) {
+    if (!item || copyingItem === item) return
+    var preview = String(item.text || "")
+    var asin = String(item.bookAsin || root.highlightsAsin || "")
+    if (item.verified !== true && asin !== "" && root.kindle
+        && item.start !== undefined && item.end !== undefined) {
+      copyingItem = item
+      root.kindle.getHighlightText(asin, item.start, item.end,
+        function(ok, result, code, message) {
+          if (ok && result && result.text) root.finishCopy(item, String(result.text))
+          else root.finishCopy(item, preview + (item.truncated === true ? "…" : ""))
+        })
+      return
+    }
+    root.finishCopy(item, preview)
   }
 
   function saveSetting(key, value) {
@@ -320,15 +266,46 @@ Panel {
   onSettingsModeChanged: body.contentY = 0
   onReadingChanged: if (!saving) Qt.callLater(maybeLoadRecent)
 
-  Timer {
-    id: recentStepTimer
-    repeat: false
-    running: false
-    property var candidates: []
-    property int index: 0
-    property int token: 0
-    property int strike: 0
-    onTriggered: root.fetchRecentAt(candidates, index, token, strike)
+  Connections {
+    target: root.kindle
+    function onHighlightsUpdated(asin, highlights) {
+      if (!highlights || !highlights.items) return
+      var items = highlights.items
+      if (!root.recentMode && String(asin) === root.highlightsAsin) {
+        root.highlights = highlights
+        root.highlightsUpdating = false
+        root.highlightsLoading = false
+        root.highlightsError = ""
+      }
+      if (root.recentHighlights.length > 0) {
+        var next = []
+        var changed = false
+        for (var index = 0; index < root.recentHighlights.length; index++) {
+          var item = root.recentHighlights[index]
+          var match = null
+          if (String(item.bookAsin || "") === String(asin)) {
+            for (var itemIndex = 0; itemIndex < items.length; itemIndex++) {
+              if (items[itemIndex].start === item.start && items[itemIndex].end === item.end) {
+                match = items[itemIndex]
+                break
+              }
+            }
+          }
+          if (match && match.text !== item.text) {
+            var updated = {}
+            for (var key in item) updated[key] = item[key]
+            updated.text = match.text
+            updated.truncated = match.truncated
+            updated.verified = match.verified
+            next.push(updated)
+            changed = true
+          } else {
+            next.push(item)
+          }
+        }
+        if (changed) root.recentHighlights = next
+      }
+    }
   }
 
   Timer {
@@ -1085,6 +1062,7 @@ Panel {
                 width: parent.width
                 height: selectedStatus.implicitHeight
                 visible: !root.recentMode && (root.highlightsLoading
+                  || root.highlightsUpdating
                   || root.highlightsError !== ""
                   || (root.highlights && root.highlights.count === 0))
 
@@ -1101,7 +1079,9 @@ Panel {
                     ? "Loading highlights…"
                     : (root.highlightsError !== ""
                       ? root.highlightsError
-                      : "No highlights for this book yet")
+                      : (root.highlightsUpdating
+                        ? "Refreshing highlights…"
+                        : "No highlights for this book yet"))
                 }
               }
 
@@ -1120,7 +1100,7 @@ Panel {
                   color: Color.muted
                   font.family: root.bar ? root.bar.fontFamily : Style.font.family
                   font.pixelSize: Style.font.bodySmall
-                  text: "Amazon truncates the web notebook for some books; more highlights may exist in the Kindle app."
+                  text: "Some highlights are previews; use Copy to fetch the full passage from Amazon."
                 }
               }
 
@@ -1160,6 +1140,7 @@ Panel {
                       wrapMode: Text.WordWrap
                       textFormat: Text.PlainText
                       text: String(modelData.text || "")
+                        + (modelData.truncated === true ? "…" : "")
                       color: root.barForeground
                       font.family: root.bar ? root.bar.fontFamily : Style.font.family
                       font.pixelSize: Style.font.bodySmall
@@ -1188,8 +1169,10 @@ Panel {
                         id: quoteCopy
                         anchors.right: parent.right
                         anchors.verticalCenter: parent.verticalCenter
-                        text: root.copiedItem === modelData ? "Copied" : "Copy"
+                        text: root.copyingItem === modelData ? "Copying…"
+                          : (root.copiedItem === modelData ? "Copied" : "Copy")
                         selected: root.copiedItem === modelData
+                          || root.copyingItem === modelData
                         foreground: root.barForeground
                         fontFamily: root.bar ? root.bar.fontFamily : Style.font.family
                         bordered: true

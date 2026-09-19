@@ -1,214 +1,217 @@
-use scraper::{Html, Selector};
+use serde::Deserialize;
 
 use crate::models::{Highlight, Highlights};
 
-pub fn parse(asin: &str, html: &str) -> Highlights {
-    let document = Html::parse_fragment(html);
-    let row_selector = selector("#kp-notebook-annotations > .a-row.a-spacing-base");
-    let highlight_selector = selector(".kp-notebook-highlight");
-    let note_selector = selector(".kp-notebook-note");
-    let note_text_selector = selector("#note");
-    let location_selector = selector("input#kp-annotation-location");
-    let id_selector = selector("input#deleteHighlightAnnotationId");
-    let metadata_selector = selector(".kp-notebook-metadata");
-    let limit_selector = selector("input.kp-notebook-content-limit-state");
+const PREVIEW_CAP_HINT: usize = 91;
+const TRUNCATION_MISMATCH: i64 = 40;
 
-    let limited = document
-        .select(&limit_selector)
-        .next()
-        .and_then(|el| el.value().attr("value"))
-        .map(|value| !value.trim().is_empty())
-        .unwrap_or(false);
+#[derive(Deserialize, Default)]
+struct AnnotationsResponse {
+    #[serde(default)]
+    annotations: Vec<Annotation>,
+}
 
+#[derive(Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct Annotation {
+    #[serde(default, rename = "type")]
+    kind: String,
+    #[serde(default)]
+    context: String,
+    #[serde(default)]
+    note: Option<String>,
+    #[serde(default)]
+    highlight_color: Option<String>,
+    #[serde(default)]
+    position: Option<i64>,
+    #[serde(default)]
+    start: Option<i64>,
+    #[serde(default)]
+    end: Option<i64>,
+    #[serde(default)]
+    position_type: Option<String>,
+    #[serde(default)]
+    guid: Option<String>,
+    #[serde(default)]
+    modified_timestamp: Option<i64>,
+}
+
+/// Parse the JSON returned by `/service/mobile/reader/getAnnotations`.
+///
+/// Amazon returns `context` for highlights as a short preview (roughly 100
+/// characters) even though `start`/`end` describe the full passage, so items
+/// carry a `truncated` flag computed from the range length.
+pub fn parse(asin: &str, body: &str) -> Result<Highlights, serde_json::Error> {
+    let response: AnnotationsResponse = serde_json::from_str(body)?;
     let mut items = Vec::new();
-    for row in document.select(&row_selector) {
-        let Some(highlight) = row.select(&highlight_selector).next() else {
-            continue;
-        };
-        let text = collect_text(highlight);
-        if text.is_empty() {
+    let mut limited = false;
+    for annotation in response.annotations {
+        if annotation.kind == "kindle.bookmark" {
             continue;
         }
-
-        let color = highlight
-            .value()
-            .classes()
-            .find_map(|class| class.strip_prefix("kp-notebook-highlight-"))
-            .map(str::to_string);
-
-        let note = row.select(&note_selector).next().and_then(|element| {
-            if element.value().classes().any(|class| class == "aok-hidden") {
-                return None;
-            }
-            let text = element
-                .select(&note_text_selector)
-                .next()
-                .map(collect_text)
-                .filter(|text| !text.is_empty())
-                .unwrap_or_else(|| collect_text(element));
-            let text = strip_label(&text);
-            (!text.is_empty()).then_some(text)
-        });
-
-        let location = row
-            .select(&location_selector)
-            .next()
-            .and_then(|el| el.value().attr("value"))
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(str::to_string);
-
-        let id = row
-            .select(&id_selector)
-            .next()
-            .and_then(|el| el.value().attr("value"))
-            .map(str::to_string)
-            .or_else(|| {
-                row.value()
-                    .id()
-                    .and_then(|id| id.strip_prefix("highlight-"))
-                    .map(str::to_string)
-            });
-
-        let page = row
-            .select(&metadata_selector)
-            .next()
-            .and_then(|el| page_from_metadata(&collect_text(el)));
-
+        let text = annotation.context.trim().to_string();
+        let note = annotation
+            .note
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
+        if text.is_empty() && note.is_none() {
+            continue;
+        }
+        let length = text.chars().count() as i64;
+        let truncated = if annotation.kind == "kindle.highlight" {
+            let range = match (annotation.start, annotation.end) {
+                (Some(start), Some(end)) if end > start => end - start,
+                _ => 0,
+            };
+            length as usize >= PREVIEW_CAP_HINT || range - length > TRUNCATION_MISMATCH
+        } else {
+            false
+        };
+        limited |= truncated;
+        let location = annotation
+            .position
+            .or(annotation.start)
+            .map(|value| value.to_string());
         items.push(Highlight {
-            id,
+            id: annotation.guid.map(|guid| match annotation.position {
+                Some(position) => format!("{guid}:{position}"),
+                None => guid,
+            }),
             text,
             note,
-            color,
+            color: annotation
+                .highlight_color
+                .filter(|value| !value.trim().is_empty()),
             location,
-            page,
+            page: None,
+            position_type: annotation.position_type,
+            start: annotation.start,
+            end: annotation.end,
+            truncated,
+            verified: false,
+            modified_at: annotation.modified_timestamp,
         });
     }
-
-    Highlights {
+    Ok(Highlights {
         asin: asin.to_string(),
         count: items.len(),
         limited,
         items,
-    }
-}
-
-fn selector(value: &str) -> Selector {
-    Selector::parse(value).expect("static selector")
-}
-
-fn collect_text(element: scraper::ElementRef) -> String {
-    element
-        .text()
-        .map(str::trim)
-        .filter(|part| !part.is_empty())
-        .collect::<Vec<_>>()
-        .join(" ")
-        .trim()
-        .to_string()
-}
-
-fn strip_label(text: &str) -> String {
-    let lower = text.to_ascii_lowercase();
-    for label in ["note:", "nota:", "note :", "nota :"] {
-        if lower.starts_with(label) {
-            return text[label.len()..].trim().to_string();
-        }
-    }
-    text.trim().to_string()
-}
-
-fn page_from_metadata(text: &str) -> Option<i64> {
-    for part in text.split('|') {
-        let lower = part.to_ascii_lowercase();
-        if lower.contains("page") || lower.contains("página") || lower.contains("pagina") {
-            let digits: String = part
-                .chars()
-                .filter(|c| c.is_ascii_digit() || *c == ',')
-                .collect();
-            let cleaned = digits.replace(',', "");
-            if let Ok(value) = cleaned.parse::<i64>() {
-                return Some(value);
-            }
-        }
-    }
-    None
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::parse;
 
-    const FIXTURE: &str = r#"
-<div id="kp-notebook-annotations">
-  <input class="kp-notebook-content-limit-state" value="token">
-  <div class="a-row a-spacing-base">
-    <div class="a-column a-span10 kp-notebook-row-separator">
-      <div class="a-row">
-        <div class="a-column a-span8">
-          <span class="a-size-small a-color-secondary kp-notebook-metadata">Yellow highlight | Page: 12 | Location: 146</span>
-        </div>
-      </div>
-      <div class="a-row a-spacing-top-medium">
-        <div class="a-column a-span10 kp-notebook-print-override">
-          <div class="a-row kp-notebook-highlight kp-notebook-selectable kp-notebook-highlight-blue">First sample highlight</div>
-          <div class="a-row a-spacing-top-base kp-notebook-note kp-notebook-selectable">
-            <span class="a-color-secondary">Note:</span>
-            <span id="note">A private note</span>
-          </div>
-        </div>
-      </div>
-    </div>
-    <input id="kp-annotation-location" value="146">
-    <input id="deleteHighlightAnnotationId" value="QUJD">
-  </div>
-  <div class="a-row a-spacing-base">
-    <div class="a-column a-span10 kp-notebook-row-separator">
-      <div class="a-row">
-        <div class="a-column a-span8">
-          <span class="kp-notebook-metadata">Yellow highlight | Location: 905</span>
-        </div>
-      </div>
-      <div class="a-row a-spacing-top-medium">
-        <div class="a-column a-span10 kp-notebook-print-override">
-          <div class="a-row kp-notebook-highlight kp-notebook-selectable kp-notebook-highlight-yellow">Second sample highlight</div>
-          <div class="a-row a-spacing-top-base kp-notebook-note aok-hidden kp-notebook-selectable">
-            <span class="a-color-secondary">Note:</span>
-            <span id="note"></span>
-          </div>
-        </div>
-      </div>
-    </div>
-    <input id="kp-annotation-location" value="905">
-  </div>
-</div>
-"#;
+    const FIXTURE: &str = r#"{
+      "annotations": [
+        {
+          "type": "kindle.highlight",
+          "asin": "B000TEST",
+          "context": "First sample highlight",
+          "highlightColor": "yellow",
+          "position": 146,
+          "start": 140,
+          "end": 162,
+          "positionType": "Mobi7",
+          "guid": "CR!TESTGUID",
+          "modifiedTimestamp": 1779929553000,
+          "note": "A private note"
+        },
+        {
+          "type": "kindle.highlight",
+          "asin": "B000TEST",
+          "context": "Truncated preview of a much longer passage that continues beyond the preview window Amazon returns here",
+          "highlightColor": null,
+          "position": 905,
+          "start": 900,
+          "end": 1100,
+          "positionType": "Mobi7",
+          "guid": "CR!TESTGUID",
+          "modifiedTimestamp": 1779929689000,
+          "note": null
+        },
+        {
+          "type": "kindle.note",
+          "asin": "B000TEST",
+          "context": "",
+          "position": 1200,
+          "start": 1195,
+          "end": 1195,
+          "positionType": "Mobi7",
+          "guid": "CR!TESTGUID",
+          "modifiedTimestamp": 1779929795000,
+          "note": "A standalone note"
+        },
+        {
+          "type": "kindle.bookmark",
+          "asin": "B000TEST",
+          "context": "Bookmarked sentence text",
+          "position": 2000,
+          "start": 2000,
+          "end": -1,
+          "guid": "CR!TESTGUID",
+          "modifiedTimestamp": 1779929800000
+        }
+      ]
+    }"#;
 
     #[test]
-    fn parses_rows_with_color_note_location_and_page() {
-        let parsed = parse("B000TEST", FIXTURE);
-        assert_eq!(parsed.count, 2);
-        assert!(parsed.limited);
+    fn parses_highlights_notes_and_skips_bookmarks() {
+        let parsed = parse("B000TEST", FIXTURE).unwrap();
+        assert_eq!(parsed.count, 3);
+        assert!(parsed.limited, "truncated preview must mark the book as limited");
 
         let first = &parsed.items[0];
         assert_eq!(first.text, "First sample highlight");
-        assert_eq!(first.color.as_deref(), Some("blue"));
+        assert_eq!(first.color.as_deref(), Some("yellow"));
         assert_eq!(first.note.as_deref(), Some("A private note"));
         assert_eq!(first.location.as_deref(), Some("146"));
-        assert_eq!(first.page, Some(12));
-        assert_eq!(first.id.as_deref(), Some("QUJD"));
+        assert_eq!(first.start, Some(140));
+        assert_eq!(first.end, Some(162));
+        assert_eq!(first.position_type.as_deref(), Some("Mobi7"));
+        assert!(!first.truncated);
+        assert_eq!(first.id.as_deref(), Some("CR!TESTGUID:146"));
 
         let second = &parsed.items[1];
-        assert_eq!(second.color.as_deref(), Some("yellow"));
-        assert_eq!(second.note, None);
-        assert_eq!(second.location.as_deref(), Some("905"));
-        assert_eq!(second.page, None);
+        assert!(second.truncated);
+        assert_eq!(second.color, None);
+
+        let third = &parsed.items[2];
+        assert_eq!(third.text, "");
+        assert_eq!(third.note.as_deref(), Some("A standalone note"));
+        assert!(!third.truncated);
     }
 
     #[test]
-    fn reports_no_highlights_for_empty_fragment() {
-        let parsed = parse("B000TEST", "<div id=\"kp-notebook-annotations\"></div>");
+    fn reports_no_highlights_for_empty_annotations() {
+        let parsed = parse("B000TEST", r#"{"annotations": []}"#).unwrap();
         assert_eq!(parsed.count, 0);
         assert!(!parsed.limited);
+    }
+
+    #[test]
+    fn flags_preview_capped_highlights_as_truncated() {
+        let preview = "d".repeat(100);
+        let body = format!(
+            r#"{{"annotations": [{{"type": "kindle.highlight", "context": "{preview}", "start": 141841, "end": 141957}}]}}"#
+        );
+        let parsed = parse("B000TEST", &body).unwrap();
+        assert!(parsed.items[0].truncated);
+        assert!(parsed.limited);
+    }
+
+    #[test]
+    fn keeps_short_highlights_untruncated() {
+        let body = r#"{"annotations": [{"type": "kindle.highlight", "context": "Sem ésteres, as cervejas seriam bastante insossas.", "start": 96520, "end": 96569}]}"#;
+        let parsed = parse("B000TEST", body).unwrap();
+        assert!(!parsed.items[0].truncated);
+        assert!(!parsed.limited);
+    }
+
+    #[test]
+    fn rejects_bodies_that_are_not_annotation_json() {
+        assert!(parse("B000TEST", "<html>sign in</html>").is_err());
     }
 }

@@ -117,7 +117,7 @@ Item {
     authStatus = "Opening your browser…"
     authBrowser = ""
     authProcess.command = [
-      "uv", "run", "--quiet", root.pluginDir + "/scripts/authorize.py",
+      "uv", "run", "--locked", "--quiet", root.pluginDir + "/scripts/authorize.py",
       "--region", String(region || "us")
     ]
     authProcess.running = true

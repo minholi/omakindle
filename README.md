@@ -24,12 +24,15 @@ changes something, and is intended for personal use with your own account.
 - A Rust toolchain to build the backend: `mise use -g rust@stable` plus
   `mise use -g cmake@latest` (BoringSSL is compiled in)
 - For the one-click sign-in: `uv` and a Chromium-based default browser
-  (Playwright is fetched by `uv` on first use; the driver downloads once)
+  (Playwright is installed by `uv run --locked` from the committed
+  `scripts/authorize.py.lock`, which pins every version and hash; the browser
+  driver downloads once)
 - For manual setup: just a browser with developer tools
 
 Dependencies: Rust crates from crates.io (locked in `backend/Cargo.lock`),
-`playwright` from PyPI fetched by `uv` for the sign-in helper, and the system
-browser it drives. No telemetry and no third-party services beyond Amazon.
+`playwright` from PyPI, pinned by `scripts/authorize.py.lock` and installed
+by `uv run --locked` for the sign-in helper, and the system browser it drives.
+No telemetry and no third-party services beyond Amazon.
 
 ## Install
 

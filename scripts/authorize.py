@@ -8,6 +8,10 @@ session with the plugin backend.
 Captures the read.amazon.com cookies and the deviceToken the Kindle web
 reader sends when it registers itself. If the token cannot be observed it
 stores the cookies only and reports that the token is still needed.
+
+Run it through `uv run --locked` (see Service.qml): the committed
+`authorize.py.lock` pins every package version and hash, so the credential
+capture path never resolves mutable releases from PyPI.
 """
 
 from __future__ import annotations

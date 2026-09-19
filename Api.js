@@ -22,6 +22,14 @@ function formatPercent(value) {
   return Math.round(number) + "%"
 }
 
+function progressMeta(percentage, device) {
+  var parts = []
+  var percent = formatPercent(percentage)
+  if (percent !== "") parts.push(percent)
+  if (device) parts.push(String(device))
+  return parts.join("  ·  ")
+}
+
 function barLabel(book, showProgress) {
   if (!book) return ""
   var title = String(book.title || "").trim()

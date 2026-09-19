@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
   "id": "minholi.kindle",
-  "name": "Kindle",
-  "version": "1.1.0",
+  "name": "OmaKindle",
+  "version": "1.2.0",
   "author": "Marcelo Minholi",
   "license": "MIT",
   "description": "Your Kindle library, reading progress, and highlights in the Omarchy bar. Read-only, unofficial, backed by your own read.amazon.com session.",
@@ -18,7 +18,7 @@
     "panel": "Panel.qml"
   },
   "barWidget": {
-    "displayName": "Kindle",
+    "displayName": "OmaKindle",
     "description": "Currently reading, library, and highlights from read.amazon.com. Requires a one-time cookie setup in settings.",
     "category": "Media",
     "aliases": [

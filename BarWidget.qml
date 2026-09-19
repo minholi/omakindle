@@ -92,7 +92,7 @@ BarWidget {
     fixedWidth: root.vertical ? -1 : content.implicitWidth + button.scaledHorizontalMargin * 2
     tooltipText: root.hasBook
       ? root.label
-      : (root.needsSetup ? "Kindle needs setup" : "Kindle")
+      : (root.needsSetup ? "OmaKindle needs setup" : "OmaKindle")
 
     onPressed: function(buttonType) {
       if (!root.bar) return
@@ -114,7 +114,7 @@ BarWidget {
         Image {
           id: bookImage
           anchors.fill: parent
-          source: Qt.resolvedUrl("assets/book.svg")
+          source: Qt.resolvedUrl("assets/omakindle.svg")
           sourceSize.width: 32
           sourceSize.height: 32
           fillMode: Image.PreserveAspectFit

@@ -1,4 +1,4 @@
-# Kindle for Omarchy
+# OmaKindle
 
 Your Kindle library, reading progress, and highlights in the Omarchy bar.
 

@@ -53,6 +53,127 @@ Panel {
     if (!recentMode) return highlights && highlights.items ? highlights.items : []
     return recentHighlights
   }
+  readonly property var recentGroups: {
+    if (!recentMode) return []
+    var groups = []
+    var index = ({})
+    for (var itemIndex = 0; itemIndex < recentHighlights.length; itemIndex++) {
+      var item = recentHighlights[itemIndex]
+      var key = String(item.bookAsin || item.bookTitle || "")
+      if (index[key] === undefined) {
+        index[key] = groups.length
+        groups.push({ key: key, title: String(item.bookTitle || ""), items: [] })
+      }
+      groups[index[key]].items.push(item)
+    }
+    return groups
+  }
+
+  function highlightColor(name) {
+    switch (String(name || "").toLowerCase()) {
+    case "yellow": return "#e8c547"
+    case "orange": return "#e08f4e"
+    case "pink": return "#d97a9e"
+    case "blue": return "#6ea8d8"
+    default: return Color.accent
+    }
+  }
+
+  component QuoteCard: Rectangle {
+    id: card
+    required property var entry
+
+    readonly property bool isTruncated: entry && entry.truncated === true
+
+    width: parent ? parent.width : 0
+    height: cardColumn.implicitHeight + Style.spacing.lg * 2
+    radius: Style.cornerRadius
+    color: Util.alpha(root.barForeground, 0.05)
+    border.width: 1
+    border.color: Util.alpha(root.barForeground, 0.12)
+
+    Rectangle {
+      anchors.left: parent.left
+      anchors.top: parent.top
+      anchors.bottom: parent.bottom
+      anchors.topMargin: Style.spacing.sm
+      anchors.bottomMargin: Style.spacing.sm
+      width: Style.space(3)
+      radius: width / 2
+      color: root.highlightColor(card.entry ? card.entry.color : "")
+    }
+
+    Column {
+      id: cardColumn
+      anchors.left: parent.left
+      anchors.right: parent.right
+      anchors.verticalCenter: parent.verticalCenter
+      anchors.leftMargin: Style.space(16)
+      anchors.rightMargin: Style.space(10)
+      spacing: Style.spacing.sm
+
+      Text {
+        width: parent.width
+        wrapMode: Text.WordWrap
+        textFormat: Text.PlainText
+        text: card.entry
+          ? String(card.entry.text || "") + (card.isTruncated ? "…" : "")
+          : ""
+        color: root.barForeground
+        font.family: root.bar ? root.bar.fontFamily : Style.font.family
+        font.pixelSize: Style.font.body
+        lineHeight: 1.15
+      }
+
+      Text {
+        width: parent.width
+        visible: card.entry && String(card.entry.note || "") !== ""
+        wrapMode: Text.WordWrap
+        textFormat: Text.PlainText
+        text: card.entry ? String(card.entry.note || "") : ""
+        color: Color.muted
+        font.family: root.bar ? root.bar.fontFamily : Style.font.family
+        font.pixelSize: Style.font.bodySmall
+        maximumLineCount: 3
+        elide: Text.ElideRight
+      }
+
+      Item {
+        width: parent.width
+        height: Math.max(quoteMeta.implicitHeight, quoteCopy.implicitHeight)
+
+        Text {
+          id: quoteMeta
+          anchors.left: parent.left
+          anchors.right: quoteCopy.left
+          anchors.rightMargin: Style.spacing.sm
+          anchors.verticalCenter: parent.verticalCenter
+          textFormat: Text.PlainText
+          text: card.entry && card.entry.location
+            ? "Location " + String(card.entry.location) : ""
+          color: Color.muted
+          font.family: root.bar ? root.bar.fontFamily : Style.font.family
+          font.pixelSize: Style.font.caption
+          elide: Text.ElideRight
+          maximumLineCount: 1
+        }
+
+        PanelActionButton {
+          id: quoteCopy
+          anchors.right: parent.right
+          anchors.verticalCenter: parent.verticalCenter
+          iconText: root.copyingItem === card.entry ? "󰦖"
+            : (root.copiedItem === card.entry ? "󰄬" : "󰆏")
+          tooltipText: root.copyingItem === card.entry ? "Copying…"
+            : (root.copiedItem === card.entry ? "Copied" : "Copy quote")
+          foreground: root.barForeground
+          bordered: true
+          size: Style.space(28)
+          onClicked: root.copyQuote(card.entry)
+        }
+      }
+    }
+  }
 
   property string cookiesInput: ""
   property string tokenInput: ""
@@ -368,7 +489,7 @@ Panel {
               Image {
                 id: brandImage
                 anchors.fill: parent
-                source: Qt.resolvedUrl("assets/book.svg")
+                source: Qt.resolvedUrl("assets/omakindle.svg")
                 sourceSize.width: 32
                 sourceSize.height: 32
                 fillMode: Image.PreserveAspectFit
@@ -385,7 +506,7 @@ Panel {
 
             Text {
               anchors.verticalCenter: parent.verticalCenter
-              text: "Kindle"
+              text: "OmaKindle"
               color: root.barForeground
               font.family: root.bar ? root.bar.fontFamily : Style.font.family
               font.pixelSize: Style.font.body
@@ -396,37 +517,46 @@ Panel {
           Row {
             id: tabRow
             anchors.left: brandRow.right
-            anchors.leftMargin: Style.space(10)
+            anchors.leftMargin: Style.space(12)
             anchors.verticalCenter: parent.verticalCenter
-            spacing: Style.space(6)
+            spacing: Style.spacing.controlGap
 
             Button {
-              text: "Continue"
+              width: Style.space(28)
+              height: Style.space(28)
+              horizontalPadding: 0
+              verticalPadding: 0
+              iconText: "󰐍"
+              tooltipText: "Continue"
               foreground: root.barForeground
-              fontFamily: root.bar ? root.bar.fontFamily : Style.font.family
               bordered: true
               selected: root.tab === 0 && !root.settingsMode
-              verticalPadding: Style.spacing.inputPaddingY
               onClicked: { root.tab = 0; root.settingsMode = false }
             }
 
             Button {
-              text: "Library"
+              width: Style.space(28)
+              height: Style.space(28)
+              horizontalPadding: 0
+              verticalPadding: 0
+              iconText: "󱉟"
+              tooltipText: "Library"
               foreground: root.barForeground
-              fontFamily: root.bar ? root.bar.fontFamily : Style.font.family
               bordered: true
               selected: root.tab === 1 && !root.settingsMode
-              verticalPadding: Style.spacing.inputPaddingY
               onClicked: { root.tab = 1; root.settingsMode = false }
             }
 
             Button {
-              text: "Highlights"
+              width: Style.space(28)
+              height: Style.space(28)
+              horizontalPadding: 0
+              verticalPadding: 0
+              iconText: "󱀡"
+              tooltipText: "Highlights"
               foreground: root.barForeground
-              fontFamily: root.bar ? root.bar.fontFamily : Style.font.family
               bordered: true
               selected: root.tab === 2 && !root.settingsMode
-              verticalPadding: Style.spacing.inputPaddingY
               onClicked: {
                 root.tab = 2
                 root.settingsMode = false
@@ -435,12 +565,15 @@ Panel {
             }
 
             Button {
-              text: "Settings"
+              width: Style.space(28)
+              height: Style.space(28)
+              horizontalPadding: 0
+              verticalPadding: 0
+              iconText: "󰒓"
+              tooltipText: "Settings"
               foreground: root.barForeground
-              fontFamily: root.bar ? root.bar.fontFamily : Style.font.family
               bordered: true
               selected: root.settingsMode
-              verticalPadding: Style.spacing.inputPaddingY
               onClicked: root.settingsMode = !root.settingsMode
             }
           }
@@ -449,24 +582,27 @@ Panel {
             id: refreshButton
             anchors.right: parent.right
             anchors.verticalCenter: parent.verticalCenter
-            text: (root.refreshing || root.highlightsLoading) ? "Refreshing…" : "Refresh"
+            width: Style.space(28)
+            height: Style.space(28)
+            horizontalPadding: 0
+            verticalPadding: 0
+            iconText: "󰑐"
+            iconSpinning: root.refreshing || root.highlightsLoading
+            tooltipText: (root.refreshing || root.highlightsLoading) ? "Refreshing…" : "Refresh"
             foreground: root.barForeground
-            fontFamily: root.bar ? root.bar.fontFamily : Style.font.family
             bordered: true
             selected: root.refreshing || root.highlightsLoading
-            verticalPadding: Style.spacing.inputPaddingY
             onClicked: root.refresh()
           }
         }
 
-        Rectangle {
+        PanelSeparator {
           id: divider
           anchors.top: tabBar.bottom
           anchors.topMargin: shell.gap
           anchors.left: parent.left
           anchors.right: parent.right
-          height: 1
-          color: Qt.darker(root.barForeground, 3)
+          foreground: root.barForeground
         }
 
         Flickable {
@@ -499,12 +635,10 @@ Panel {
               spacing: Style.space(10)
               visible: root.settingsMode
 
-              Text {
+              PanelSectionHeader {
                 text: "Amazon session"
-                color: root.barForeground
-                font.family: root.bar ? root.bar.fontFamily : Style.font.family
-                font.pixelSize: Style.font.body
-                font.bold: true
+                foreground: root.barForeground
+                fontFamily: root.bar ? root.bar.fontFamily : Style.font.family
               }
 
               Text {
@@ -660,18 +794,15 @@ Panel {
                 text: root.saveMessage
               }
 
-              Rectangle {
+              PanelSeparator {
                 width: parent.width
-                height: 1
-                color: Qt.darker(root.barForeground, 3)
+                foreground: root.barForeground
               }
 
-              Text {
+              PanelSectionHeader {
                 text: "Refresh every"
-                color: root.barForeground
-                font.family: root.bar ? root.bar.fontFamily : Style.font.family
-                font.pixelSize: Style.font.body
-                font.bold: true
+                foreground: root.barForeground
+                fontFamily: root.bar ? root.bar.fontFamily : Style.font.family
               }
 
               Row {
@@ -694,10 +825,9 @@ Panel {
                 }
               }
 
-              Rectangle {
+              PanelSeparator {
                 width: parent.width
-                height: 1
-                color: Qt.darker(root.barForeground, 3)
+                foreground: root.barForeground
               }
 
               Text {
@@ -707,7 +837,7 @@ Panel {
                 color: Color.muted
                 font.family: root.bar ? root.bar.fontFamily : Style.font.family
                 font.pixelSize: Style.font.bodySmall
-                text: "Kindle for Omarchy"
+                text: "OmaKindle"
                   + (root.kindle && root.kindle.manifest && root.kindle.manifest.version
                     ? " · v" + String(root.kindle.manifest.version) : "")
                   + " — unofficial, read-only, for personal use"
@@ -719,20 +849,12 @@ Panel {
               spacing: Style.space(8)
               visible: !root.settingsMode && root.tab === 0
 
-              Item {
-                width: parent.width
-                height: readingCount.implicitHeight
+              PanelSectionHeader {
+                x: Style.space(14)
                 visible: root.reading.length > 0
-
-                Text {
-                  id: readingCount
-                  x: Style.space(14)
-                  width: parent.width - Style.space(34)
-                  text: root.reading.length + " in progress"
-                  color: Color.muted
-                  font.family: root.bar ? root.bar.fontFamily : Style.font.family
-                  font.pixelSize: Style.font.bodySmall
-                }
+                text: root.reading.length + " in progress"
+                foreground: root.barForeground
+                fontFamily: root.bar ? root.bar.fontFamily : Style.font.family
               }
 
               Item {
@@ -750,7 +872,7 @@ Panel {
                   font.family: root.bar ? root.bar.fontFamily : Style.font.family
                   font.pixelSize: Style.font.bodySmall
                   text: root.errorCode !== ""
-                    ? (root.errorMessage !== "" ? root.errorMessage : "Kindle needs setup")
+                    ? (root.errorMessage !== "" ? root.errorMessage : "OmaKindle needs setup")
                     : (root.refreshing ? "Loading your library…" : "Nothing in progress right now")
                 }
               }
@@ -761,12 +883,12 @@ Panel {
                 Rectangle {
                   required property var modelData
                   width: parent.width
-                  height: Math.max(readingCover.height,
-                      Math.max(readingInfo.implicitHeight, readingActions.implicitHeight))
-                    + Style.space(16)
+                  height: Style.space(64)
                   radius: Style.cornerRadius
                   color: readingMouse.containsMouse
-                    ? Qt.darker(root.barForeground, 8) : "transparent"
+                    ? Util.alpha(root.barForeground, 0.06) : "transparent"
+
+                  Behavior on color { ColorAnimation { duration: 120 } }
 
                   MouseArea {
                     id: readingMouse
@@ -798,7 +920,7 @@ Panel {
                     anchors.right: readingActions.left
                     anchors.rightMargin: Style.space(12)
                     anchors.verticalCenter: parent.verticalCenter
-                    spacing: Style.space(4)
+                    spacing: Style.spacing.sm
 
                     Text {
                       width: parent.width
@@ -820,56 +942,67 @@ Panel {
                       maximumLineCount: 1
                     }
 
-                    Rectangle {
+                    Item {
                       width: parent.width
-                      height: Style.space(3)
-                      radius: height / 2
-                      color: Qt.darker(root.barForeground, 6)
+                      height: Math.max(readingMeta.implicitHeight, Style.space(4))
 
                       Rectangle {
-                        width: parent.width * Math.max(0, Math.min(100,
-                          Number(modelData.percentageRead || 0))) / 100
-                        height: parent.height
-                        radius: parent.radius
-                        color: Color.accent
-                      }
-                    }
+                        id: readingTrack
+                        anchors.left: parent.left
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: Style.space(64)
+                        height: Style.space(4)
+                        radius: height / 2
+                        color: Util.alpha(root.barForeground, 0.12)
 
-                    Text {
-                      width: parent.width
-                      text: Api.formatPercent(modelData.percentageRead)
-                        + (modelData.deviceName ? "  ·  " + String(modelData.deviceName) : "")
-                      color: Color.muted
-                      font.family: root.bar ? root.bar.fontFamily : Style.font.family
-                      font.pixelSize: Style.font.bodySmall
-                      elide: Text.ElideRight
-                      maximumLineCount: 1
+                        Rectangle {
+                          width: parent.width * Math.max(0, Math.min(100,
+                            Number(modelData.percentageRead || 0))) / 100
+                          height: parent.height
+                          radius: parent.radius
+                          color: Color.accent
+                        }
+                      }
+
+                      Text {
+                        id: readingMeta
+                        anchors.left: readingTrack.right
+                        anchors.leftMargin: Style.spacing.sm
+                        anchors.right: parent.right
+                        anchors.verticalCenter: parent.verticalCenter
+                        textFormat: Text.PlainText
+                        text: Api.progressMeta(modelData.percentageRead, modelData.deviceName)
+                        color: Color.muted
+                        font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                        font.pixelSize: Style.font.caption
+                        elide: Text.ElideRight
+                        maximumLineCount: 1
+                      }
                     }
                   }
 
                   Row {
                     id: readingActions
                     anchors.right: parent.right
-                    anchors.rightMargin: Style.space(20)
+                    anchors.rightMargin: Style.space(10)
                     anchors.verticalCenter: parent.verticalCenter
-                    spacing: Style.space(4)
+                    spacing: Style.spacing.controlGap
 
-                    Button {
-                      text: "Quotes"
+                    PanelActionButton {
+                      iconText: "󱀡"
+                      tooltipText: "Quotes"
                       foreground: root.barForeground
-                      fontFamily: root.bar ? root.bar.fontFamily : Style.font.family
                       bordered: true
-                      verticalPadding: Style.spacing.inputPaddingY
+                      size: Style.space(28)
                       onClicked: root.loadHighlights(modelData)
                     }
 
-                    Button {
-                      text: "Read"
+                    PanelActionButton {
+                      iconText: "󰗚"
+                      tooltipText: "Read"
                       foreground: root.barForeground
-                      fontFamily: root.bar ? root.bar.fontFamily : Style.font.family
                       bordered: true
-                      selected: true
-                      verticalPadding: Style.spacing.inputPaddingY
+                      size: Style.space(28)
                       onClicked: root.openBook(modelData)
                     }
                   }
@@ -891,19 +1024,11 @@ Panel {
                 onTextChanged: root.search = text
               }
 
-              Item {
-                width: parent.width
-                height: libraryCount.implicitHeight
-
-                Text {
-                  id: libraryCount
-                  x: Style.space(14)
-                  width: parent.width - Style.space(34)
-                  text: root.filteredBooks.length + " of " + root.books.length + " books"
-                  color: Color.muted
-                  font.family: root.bar ? root.bar.fontFamily : Style.font.family
-                  font.pixelSize: Style.font.bodySmall
-                }
+              PanelSectionHeader {
+                x: Style.space(14)
+                text: root.filteredBooks.length + " of " + root.books.length + " books"
+                foreground: root.barForeground
+                fontFamily: root.bar ? root.bar.fontFamily : Style.font.family
               }
 
               Repeater {
@@ -912,12 +1037,12 @@ Panel {
                 Rectangle {
                   required property var modelData
                   width: parent.width
-                  height: Math.max(libraryCover.height,
-                      Math.max(libraryInfo.implicitHeight, libraryQuote.implicitHeight))
-                    + Style.space(14)
+                  height: Style.space(56)
                   radius: Style.cornerRadius
                   color: libraryMouse.containsMouse
-                    ? Qt.darker(root.barForeground, 8) : "transparent"
+                    ? Util.alpha(root.barForeground, 0.06) : "transparent"
+
+                  Behavior on color { ColorAnimation { duration: 120 } }
 
                   MouseArea {
                     id: libraryMouse
@@ -946,10 +1071,10 @@ Panel {
                     id: libraryInfo
                     anchors.left: libraryCover.right
                     anchors.leftMargin: Style.space(12)
-                    anchors.right: libraryQuote.left
+                    anchors.right: libraryActions.left
                     anchors.rightMargin: Style.space(12)
                     anchors.verticalCenter: parent.verticalCenter
-                    spacing: Style.space(4)
+                    spacing: Style.spacing.sm
 
                     Text {
                       width: parent.width
@@ -972,17 +1097,30 @@ Panel {
                     }
                   }
 
-                  Button {
-                    id: libraryQuote
+                  Row {
+                    id: libraryActions
                     anchors.right: parent.right
-                    anchors.rightMargin: Style.space(20)
+                    anchors.rightMargin: Style.space(10)
                     anchors.verticalCenter: parent.verticalCenter
-                    text: "Quotes"
-                    foreground: root.barForeground
-                    fontFamily: root.bar ? root.bar.fontFamily : Style.font.family
-                    bordered: true
-                    verticalPadding: Style.spacing.inputPaddingY
-                    onClicked: root.loadHighlights(modelData)
+                    spacing: Style.spacing.controlGap
+
+                    PanelActionButton {
+                      iconText: "󱀡"
+                      tooltipText: "Quotes"
+                      foreground: root.barForeground
+                      bordered: true
+                      size: Style.space(28)
+                      onClicked: root.loadHighlights(modelData)
+                    }
+
+                    PanelActionButton {
+                      iconText: "󰗚"
+                      tooltipText: "Read"
+                      foreground: root.barForeground
+                      bordered: true
+                      size: Style.space(28)
+                      onClicked: root.openBook(modelData)
+                    }
                   }
                 }
               }
@@ -1001,7 +1139,6 @@ Panel {
                 Text {
                   id: highlightsHeading
                   anchors.left: parent.left
-                  anchors.leftMargin: Style.space(14)
                   anchors.right: highlightsHeadingActions.left
                   anchors.rightMargin: Style.space(8)
                   anchors.verticalCenter: parent.verticalCenter
@@ -1019,7 +1156,7 @@ Panel {
                 Row {
                   id: highlightsHeadingActions
                   anchors.right: parent.right
-                  anchors.rightMargin: Style.space(20)
+                  anchors.rightMargin: Style.space(10)
                   anchors.verticalCenter: parent.verticalCenter
                   spacing: Style.space(6)
 
@@ -1043,8 +1180,7 @@ Panel {
 
                 Text {
                   id: recentStatus
-                  x: Style.space(14)
-                  width: parent.width - Style.space(34)
+                  width: parent.width - Style.space(20)
                   wrapMode: Text.WordWrap
                   textFormat: Text.PlainText
                   color: Color.muted
@@ -1068,8 +1204,7 @@ Panel {
 
                 Text {
                   id: selectedStatus
-                  x: Style.space(14)
-                  width: parent.width - Style.space(34)
+                  width: parent.width - Style.space(20)
                   wrapMode: Text.WordWrap
                   textFormat: Text.PlainText
                   color: root.highlightsError !== "" ? Color.urgent : Color.muted
@@ -1093,8 +1228,7 @@ Panel {
 
                 Text {
                   id: limitedNotice
-                  x: Style.space(14)
-                  width: parent.width - Style.space(34)
+                  width: parent.width - Style.space(20)
                   wrapMode: Text.WordWrap
                   textFormat: Text.PlainText
                   color: Color.muted
@@ -1105,82 +1239,40 @@ Panel {
               }
 
               Repeater {
-                model: root.displayedHighlights
+                model: root.recentMode ? root.recentGroups : []
 
-                Rectangle {
+                Column {
                   required property var modelData
                   width: parent.width
-                  height: quoteColumn.implicitHeight + Style.space(16)
-                  radius: Style.cornerRadius
-                  color: Qt.darker(root.barForeground, 9)
+                  spacing: Style.spacing.sm
 
-                  Column {
-                    id: quoteColumn
-                    anchors.left: parent.left
-                    anchors.right: parent.right
-                    anchors.verticalCenter: parent.verticalCenter
-                    anchors.leftMargin: Style.space(14)
-                    anchors.rightMargin: Style.space(20)
-                    spacing: Style.space(6)
+                  PanelSectionHeader {
+                    width: parent.width
+                    visible: String(modelData.title || "") !== ""
+                    text: String(modelData.title || "")
+                    foreground: root.barForeground
+                    fontFamily: root.bar ? root.bar.fontFamily : Style.font.family
+                    elide: Text.ElideRight
+                    maximumLineCount: 1
+                  }
 
-                    Text {
-                      width: parent.width
-                      visible: String(modelData.bookTitle || "") !== ""
-                      text: String(modelData.bookTitle || "")
-                      color: Color.muted
-                      font.family: root.bar ? root.bar.fontFamily : Style.font.family
-                      font.pixelSize: Style.font.bodySmall
-                      font.bold: true
-                      elide: Text.ElideRight
-                      maximumLineCount: 1
-                    }
+                  Repeater {
+                    model: modelData.items
 
-                    Text {
-                      width: parent.width
-                      wrapMode: Text.WordWrap
-                      textFormat: Text.PlainText
-                      text: String(modelData.text || "")
-                        + (modelData.truncated === true ? "…" : "")
-                      color: root.barForeground
-                      font.family: root.bar ? root.bar.fontFamily : Style.font.family
-                      font.pixelSize: Style.font.bodySmall
-                    }
-
-                    Item {
-                      width: parent.width
-                      height: Math.max(quoteMeta.implicitHeight, quoteCopy.implicitHeight)
-
-                      Text {
-                        id: quoteMeta
-                        anchors.left: parent.left
-                        anchors.right: quoteCopy.left
-                        anchors.rightMargin: Style.space(8)
-                        anchors.verticalCenter: parent.verticalCenter
-                        text: (modelData.location ? "Location " + String(modelData.location) : "")
-                          + (modelData.note ? "  ·  Note: " + String(modelData.note) : "")
-                        color: Color.muted
-                        font.family: root.bar ? root.bar.fontFamily : Style.font.family
-                        font.pixelSize: Style.font.bodySmall
-                        elide: Text.ElideRight
-                        maximumLineCount: 1
-                      }
-
-                      Button {
-                        id: quoteCopy
-                        anchors.right: parent.right
-                        anchors.verticalCenter: parent.verticalCenter
-                        text: root.copyingItem === modelData ? "Copying…"
-                          : (root.copiedItem === modelData ? "Copied" : "Copy")
-                        selected: root.copiedItem === modelData
-                          || root.copyingItem === modelData
-                        foreground: root.barForeground
-                        fontFamily: root.bar ? root.bar.fontFamily : Style.font.family
-                        bordered: true
-                        verticalPadding: Style.spacing.inputPaddingY
-                        onClicked: root.copyQuote(modelData)
-                      }
+                    QuoteCard {
+                      required property var modelData
+                      entry: modelData
                     }
                   }
+                }
+              }
+
+              Repeater {
+                model: root.recentMode ? [] : root.displayedHighlights
+
+                QuoteCard {
+                  required property var modelData
+                  entry: modelData
                 }
               }
             }

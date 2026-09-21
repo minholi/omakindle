@@ -42,6 +42,14 @@ pub struct Snapshot {
     pub updated_at: Option<u64>,
     pub refreshing: bool,
     pub needs_device_token: bool,
+    /// Set when reading progress could not be fetched even though the library
+    /// loaded. `reading` may then be empty or stale, so the UI can explain why
+    /// instead of claiming nothing is in progress.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub progress_error: Option<String>,
+    /// Machine-readable companion to `progress_error`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub progress_error_code: Option<String>,
 }
 
 impl Default for Snapshot {
@@ -56,6 +64,8 @@ impl Default for Snapshot {
             updated_at: None,
             refreshing: false,
             needs_device_token: false,
+            progress_error: None,
+            progress_error_code: None,
         }
     }
 }
@@ -223,6 +233,8 @@ impl App {
             state.error = None;
             state.error_code = None;
             state.needs_device_token = !has_token;
+            state.progress_error = None;
+            state.progress_error_code = None;
         }
         self.emit().await;
         Ok(())
@@ -332,6 +344,7 @@ impl App {
             .map(|book| book.asin.clone())
             .collect();
         let mut points: HashMap<String, CachedPoint> = HashMap::new();
+        let mut progress_error: Option<(String, String)> = None;
         if has_token {
             for asin in targets {
                 match progress_for(client, &asin).await {
@@ -342,7 +355,16 @@ impl App {
                         drop(client_guard);
                         return Err(("auth_expired".to_string(), "cookies have expired".into()));
                     }
-                    Err(_) => {}
+                    Err(error) => {
+                        // Progress needs an ADP session, which is separate from
+                        // the cookie session the library uses. Record the first
+                        // failure so the UI can explain an empty Continue list
+                        // instead of silently showing nothing.
+                        eprintln!("omakindle: progress for {asin} failed: {error}");
+                        if progress_error.is_none() {
+                            progress_error = Some(progress_failure(error));
+                        }
+                    }
                 }
                 tokio::time::sleep(PROGRESS_PAUSE).await;
             }
@@ -350,6 +372,13 @@ impl App {
         drop(client_guard);
 
         let region = self.state.read().await.region.clone();
+        // Progress is best-effort: when every call failed, keep the points from
+        // the previous cache so a transient Amazon failure does not erase the
+        // reading list the user already had.
+        let mut points = points;
+        if points.is_empty() {
+            points = load_cache().points;
+        }
         let cache = Cache {
             region,
             books: books.clone(),
@@ -367,6 +396,8 @@ impl App {
         state.reading = reading_from_cache(&cache);
         state.updated_at = cache.updated_at;
         state.needs_device_token = !has_token;
+        state.progress_error = progress_error.as_ref().map(|(_, message)| message.clone());
+        state.progress_error_code = progress_error.map(|(code, _)| code);
         Ok(())
     }
 
@@ -775,6 +806,28 @@ fn map_error(error: AmazonError) -> (String, String) {
     }
 }
 
+/// Classify a progress failure for the UI. Reading progress travels through an
+/// ADP session (device registration plus startReading) that is separate from
+/// the cookie session used by the library, so a failure here usually means
+/// Amazon refused the device registration rather than that the cookies expired.
+fn progress_failure(error: AmazonError) -> (String, String) {
+    if let AmazonError::Amazon { status, ref message } = error {
+        if status == 403 {
+            return (
+                "progress_unavailable".to_string(),
+                format!(
+                    "Amazon refused reading progress for this account ({message}). The web reader shows the same error. Open a book at read.amazon.com, then sign in again here"
+                ),
+            );
+        }
+    }
+    let (_code, message) = map_error(error);
+    (
+        "progress_error".to_string(),
+        format!("Reading progress is unavailable: {message}"),
+    )
+}
+
 fn dev_credentials() -> Option<(String, String, String)> {
     let cookies = std::env::var("OMAKINDLE_COOKIES").ok()?;
     let token = std::env::var("OMAKINDLE_DEVICE_TOKEN").ok()?;
@@ -906,8 +959,64 @@ fn now_secs() -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{merge_full_texts, CachedHighlights};
-    use crate::models::Highlight;
+    use super::{
+        merge_full_texts, progress_failure, reading_from_cache, Cache, CachedHighlights,
+        CachedPoint,
+    };
+    use crate::amazon::Error as AmazonError;
+    use crate::models::{Book, Highlight, Progress};
+
+    fn book(asin: &str) -> Book {
+        Book {
+            asin: asin.to_string(),
+            title: format!("Book {asin}"),
+            authors: vec!["Author".into()],
+            cover_url: String::new(),
+            web_reader_url: String::new(),
+            resource_type: "EBOOK".into(),
+            origin_type: "PURCHASE".into(),
+        }
+    }
+
+    #[test]
+    fn flags_adp_refusal_as_progress_unavailable() {
+        let (code, message) = progress_failure(AmazonError::Amazon {
+            status: 403,
+            message: "All auth tokens in the session are invalid.".into(),
+        });
+        assert_eq!(code, "progress_unavailable");
+        assert!(message.contains("read.amazon.com"));
+    }
+
+    #[test]
+    fn keeps_generic_progress_errors_generic() {
+        let (code, _) = progress_failure(AmazonError::Http("timeout".into()));
+        assert_eq!(code, "progress_error");
+    }
+
+    #[test]
+    fn reading_from_cache_skips_books_without_progress() {
+        let mut cache = Cache {
+            region: "us".into(),
+            books: vec![book("A"), book("B")],
+            ..Cache::default()
+        };
+        cache.points.insert(
+            "A".into(),
+            CachedPoint {
+                progress: Some(Progress {
+                    position: Some(120),
+                    device_name: Some("Kindle".into()),
+                    sync_time: Some(42),
+                }),
+                percentage: Some(12.5),
+            },
+        );
+        let reading = reading_from_cache(&cache);
+        assert_eq!(reading.len(), 1);
+        assert_eq!(reading[0].asin, "A");
+        assert_eq!(reading[0].percentage_read, 12.5);
+    }
 
     fn item(start: i64, end: i64, text: &str, truncated: bool, verified: bool) -> Highlight {
         Highlight {

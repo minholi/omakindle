@@ -37,6 +37,10 @@ Item {
   readonly property string errorMessage: client.errorMessage
   readonly property string region: state && state.region ? String(state.region) : "us"
   readonly property bool needsDeviceToken: !!(state && state.needsDeviceToken)
+  readonly property string progressError: state && state.progressError
+    ? String(state.progressError) : ""
+  readonly property string progressErrorCode: state && state.progressErrorCode
+    ? String(state.progressErrorCode) : ""
 
   property bool shuttingDown: false
   property bool authRunning: false

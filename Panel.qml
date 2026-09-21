@@ -29,6 +29,7 @@ Panel {
   readonly property string errorCode: kindle ? String(kindle.errorCode || "") : ""
   readonly property string errorMessage: kindle ? String(kindle.errorMessage || "") : ""
   readonly property string configuredRegion: kindle ? String(kindle.region || "us") : "us"
+  readonly property string progressError: kindle ? String(kindle.progressError || "") : ""
 
   property int tab: 0
   property string search: ""
@@ -868,12 +869,33 @@ Panel {
                   width: parent.width - Style.space(34)
                   wrapMode: Text.WordWrap
                   textFormat: Text.PlainText
-                  color: Color.muted
+                  color: root.errorCode !== "" || root.progressError !== ""
+                    ? Color.urgent : Color.muted
                   font.family: root.bar ? root.bar.fontFamily : Style.font.family
                   font.pixelSize: Style.font.bodySmall
                   text: root.errorCode !== ""
                     ? (root.errorMessage !== "" ? root.errorMessage : "OmaKindle needs setup")
-                    : (root.refreshing ? "Loading your library…" : "Nothing in progress right now")
+                    : (root.progressError !== ""
+                      ? root.progressError
+                      : (root.refreshing ? "Loading your library…" : "Nothing in progress right now"))
+                }
+              }
+
+              Item {
+                width: parent.width
+                height: progressWarning.implicitHeight
+                visible: root.reading.length > 0 && root.progressError !== ""
+
+                Text {
+                  id: progressWarning
+                  x: Style.space(14)
+                  width: parent.width - Style.space(34)
+                  wrapMode: Text.WordWrap
+                  textFormat: Text.PlainText
+                  color: Color.urgent
+                  font.family: root.bar ? root.bar.fontFamily : Style.font.family
+                  font.pixelSize: Style.font.bodySmall
+                  text: "Progress may be out of date. " + root.progressError
                 }
               }
 

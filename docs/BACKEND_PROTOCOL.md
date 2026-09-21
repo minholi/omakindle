@@ -69,6 +69,15 @@ The snapshot contains:
 - `needsDeviceToken`: true when the stored session has cookies but no device
   token; the library works without it, but progress and highlights need the
   token and report `needs_device_token` until it is stored
+- `progressError` and `progressErrorCode`: present only when the library loaded
+  but reading progress could not be fetched. Reading progress travels through an
+  ADP session (device registration plus `startReading`) that is separate from the
+  cookie session used by the library, so Amazon can accept the library while
+  refusing device registration. When every progress call fails, the previous
+  `points` are kept so `reading` is not erased; the UI uses these fields to
+  explain that the list is empty or stale rather than claiming nothing is in
+  progress. `progressErrorCode` is `progress_unavailable` for a 403 refusal from
+  the ADP endpoints and `progress_error` for any other failure
 
 ## Commands
 
@@ -108,6 +117,10 @@ The snapshot contains:
 - `invalid_credentials` — cookies or device token were rejected
 - `auth_expired` — the stored session was signed out
 - `needs_device_token` — stored session has cookies but no device token
+- `progress_unavailable` — Amazon refused device registration (`startReading`)
+  for the session even though the library loaded; the web reader shows the same
+  error, and re-signing in is required
+- `progress_error` — reading progress failed for another reason
 - `unavailable` — Amazon refuses to provide reading data for this book
 - `session_error` — the session file could not be read or written
 - `busy` — a refresh is already running

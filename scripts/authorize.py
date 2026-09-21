@@ -12,6 +12,12 @@ stores the cookies only and reports that the token is still needed.
 Run it through `uv run --locked` (see Service.qml): the committed
 `authorize.py.lock` pins every package version and hash, so the credential
 capture path never resolves mutable releases from PyPI.
+
+The helper fails closed before opening a browser: it refuses to capture
+credentials unless `XDG_RUNTIME_DIR` is a private, user-owned directory and
+the backend socket inside it is owned by the current user. It also verifies
+the listener's uid with `SO_PEERCRED` after connecting and bounds every line
+it reads, so another local user can never receive the session.
 """
 
 from __future__ import annotations
@@ -22,6 +28,8 @@ import os
 import re
 import shutil
 import socket
+import stat
+import struct
 import subprocess
 import sys
 import time
@@ -34,6 +42,8 @@ REGION_SUFFIXES = {
     "mx": "com.mx", "nl": "nl",
 }
 REQUIRED_COOKIES = ("ubid-main", "at-main", "x-main", "session-id")
+MAX_REQUEST_BYTES = 256 * 1024
+MAX_RESPONSE_LINE = 8 * 1024 * 1024
 
 CHROMIUM_FALLBACKS = [
     ("channel", "chrome", "Google Chrome"),
@@ -148,12 +158,81 @@ def device_serial(url: str) -> str:
     return value
 
 
-def rpc(socket_path: str, command: str, **fields) -> dict | None:
-    payload = {"v": 1, "id": 1, "command": command, **fields}
-    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+def validate_dir(path: Path, forbidden: int) -> None:
+    try:
+        info = path.lstat()
+    except OSError as error:
+        raise RuntimeError(f"cannot inspect {path}: {error}") from error
+    if not stat.S_ISDIR(info.st_mode):
+        raise RuntimeError(f"{path} is not a directory")
+    if info.st_uid != os.getuid():
+        raise RuntimeError(f"{path} is not owned by the current user")
+    if info.st_mode & forbidden:
+        raise RuntimeError(f"{path} is accessible to other local users")
+
+
+def secure_socket_path(override: str) -> Path:
+    if override:
+        path = Path(override)
+        if not path.is_absolute():
+            raise RuntimeError("--socket must be an absolute path")
+        validate_dir(path.parent, 0o022)
+    else:
+        runtime = os.environ.get("XDG_RUNTIME_DIR", "")
+        if not runtime:
+            raise RuntimeError("XDG_RUNTIME_DIR is not set")
+        base = Path(runtime)
+        if not base.is_absolute():
+            raise RuntimeError("XDG_RUNTIME_DIR is not an absolute path")
+        validate_dir(base, 0o022)
+        path = base / "omakindle" / "backend.sock"
+        validate_dir(path.parent, 0o077)
+    try:
+        info = path.lstat()
+    except FileNotFoundError as error:
+        raise RuntimeError(f"the Kindle backend is not listening at {path}") from error
+    except OSError as error:
+        raise RuntimeError(f"cannot inspect {path}: {error}") from error
+    if not stat.S_ISSOCK(info.st_mode):
+        raise RuntimeError(f"{path} is not a socket")
+    if info.st_uid != os.getuid():
+        raise RuntimeError(f"{path} is not owned by the current user")
+    return path
+
+
+def connect_verified(path: Path) -> socket.socket:
+    info = path.lstat()
+    if not stat.S_ISSOCK(info.st_mode) or info.st_uid != os.getuid():
+        raise RuntimeError(f"{path} is not a socket owned by the current user")
+    if not hasattr(socket, "SO_PEERCRED"):
+        raise RuntimeError(
+            "this platform cannot verify the socket peer; refusing to send credentials"
+        )
+    client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
         client.settimeout(180)
-        client.connect(socket_path)
-        client.sendall(json.dumps(payload).encode() + b"\n")
+        client.connect(str(path))
+        credentials = client.getsockopt(
+            socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize("3i"))
+        _pid, uid, _gid = struct.unpack("3i", credentials)
+        if uid != os.getuid():
+            raise RuntimeError(
+                "the socket is served by another local user; refusing to send credentials"
+            )
+    except Exception:
+        client.close()
+        raise
+    return client
+
+
+def rpc(socket_path: Path, command: str, **fields) -> dict | None:
+    payload = {"v": 1, "id": 1, "command": command, **fields}
+    encoded = json.dumps(payload).encode()
+    if len(encoded) > MAX_REQUEST_BYTES:
+        raise RuntimeError("the request exceeds the backend line limit")
+    client = connect_verified(socket_path)
+    with client:
+        client.sendall(encoded + b"\n")
         buffer = b""
         while True:
             while b"\n" not in buffer:
@@ -161,6 +240,8 @@ def rpc(socket_path: str, command: str, **fields) -> dict | None:
                 if not chunk:
                     return None
                 buffer += chunk
+                if len(buffer) > MAX_RESPONSE_LINE:
+                    raise RuntimeError("the backend response exceeds the line limit")
             line, buffer = buffer.split(b"\n", 1)
             message = json.loads(line)
             if message.get("type") == "response" and message.get("id") == 1:
@@ -172,15 +253,25 @@ def main() -> int:
     parser.add_argument("--region", default="us")
     parser.add_argument("--browser", default="")
     parser.add_argument("--timeout", type=int, default=300)
-    parser.add_argument("--socket", default=os.path.join(
-        os.environ.get("XDG_RUNTIME_DIR", "/tmp"), "omakindle", "backend.sock"))
+    parser.add_argument("--socket", default="",
+                        help="Socket path; must live in a private, user-owned directory")
     args = parser.parse_args()
+
+    try:
+        socket_path = secure_socket_path(args.socket)
+    except RuntimeError as error:
+        emit({"ok": False, "error": str(error)})
+        return 1
 
     suffix = REGION_SUFFIXES.get(args.region.lower(), args.region.lower())
     base = f"https://read.amazon.{suffix}"
     profile_dir = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "omakindle" / "browser"
-    profile_dir.mkdir(parents=True, exist_ok=True)
-    os.chmod(profile_dir, 0o700)
+    try:
+        profile_dir.mkdir(parents=True, exist_ok=True)
+        os.chmod(profile_dir, 0o700)
+    except OSError as error:
+        emit({"ok": False, "error": f"cannot prepare the browser profile directory: {error}"})
+        return 1
 
     try:
         config = resolve_browser(args.browser)
@@ -273,11 +364,11 @@ def main() -> int:
 
             if token:
                 emit({"status": "saving", "hasToken": True})
-                response = rpc(args.socket, "set_credentials",
+                response = rpc(socket_path, "set_credentials",
                                cookies=header, deviceToken=token, region=args.region)
             else:
                 emit({"status": "saving", "hasToken": False})
-                response = rpc(args.socket, "store_cookies",
+                response = rpc(socket_path, "store_cookies",
                                cookies=header, region=args.region)
 
             if response is None or not response.get("ok"):

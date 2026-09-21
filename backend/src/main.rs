@@ -44,6 +44,7 @@ enum Command {
     /// Run the plugin daemon on a Unix socket.
     Serve {
         /// Socket path; defaults to $XDG_RUNTIME_DIR/omakindle/backend.sock.
+        /// Must live in a private, user-owned directory.
         #[arg(long)]
         socket: Option<PathBuf>,
     },
@@ -95,7 +96,16 @@ async fn main() {
             Err(error) => println!("load: error: {error}"),
         },
         Command::Serve { socket } => {
-            let path = socket.unwrap_or_else(socket::default_socket_path);
+            let path = match socket {
+                Some(path) => path,
+                None => match socket::default_socket_path() {
+                    Ok(path) => path,
+                    Err(error) => {
+                        eprintln!("omakindle-backend: refusing to start: {error}");
+                        std::process::exit(1);
+                    }
+                },
+            };
             let app = state::App::new();
             if let Err(error) = socket::serve(app, &path).await {
                 eprintln!("omakindle-backend: serve failed on {}: {error}", path.display());

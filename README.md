@@ -48,7 +48,10 @@ the plugin is also installable from the Omarchy plugin marketplace.
 ## Set up your Amazon session
 
 The plugin never sees your password. It reuses the browser session from
-`read.amazon.com`, which stays valid for about a year.
+`read.amazon.com`, which stays valid for about a year. The helper and backend
+talk over a private Unix socket under `$XDG_RUNTIME_DIR` (standard in a Wayland
+session). If that directory is missing or accessible to other users the plugin
+fails closed and never falls back to a shared `/tmp` path.
 
 **Sign in from the panel (recommended).** Open the panel → **Settings** →
 **Sign in with Amazon**. The plugin opens your default browser through

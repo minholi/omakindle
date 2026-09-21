@@ -18,6 +18,7 @@ Item {
   readonly property string pluginId: manifest && manifest.id
     ? String(manifest.id) : "minholi.kindle"
   readonly property string homeDirectory: Quickshell.env("HOME") || ""
+  readonly property string runtimeDirectory: Quickshell.env("XDG_RUNTIME_DIR") || ""
   readonly property string configHome: Quickshell.env("XDG_CONFIG_HOME")
     || (homeDirectory ? homeDirectory + "/.config" : ".config")
   readonly property string pluginDir: manifest && manifest.__sourceDir
@@ -110,6 +111,12 @@ Item {
 
   function authorize(region) {
     if (authRunning) return
+    if (runtimeDirectory === "") {
+      authFailed = true
+      authStatus = "XDG_RUNTIME_DIR is not set; refusing to open the local credential socket"
+      authFinished(false, false, authStatus)
+      return
+    }
     authRunning = true
     authSucceeded = false
     authFailed = false
@@ -162,7 +169,8 @@ Item {
   Process {
     id: backendProcess
     command: [root.backendPath, "serve"]
-    running: root.backendPath !== "" && !root.shuttingDown
+    running: root.backendPath !== "" && root.runtimeDirectory !== ""
+      && !root.shuttingDown
     onExited: function(code, status) {
       if (!root.shuttingDown) restartTimer.restart()
     }

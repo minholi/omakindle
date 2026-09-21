@@ -1,14 +1,20 @@
-use std::os::unix::fs::PermissionsExt;
+use std::io;
+use std::os::unix::fs::{DirBuilderExt, FileTypeExt, MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use serde::Deserialize;
 use serde_json::{json, Value};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::mpsc;
 
 use crate::state::App;
+
+const APP_DIR: &str = "omakindle";
+const SOCKET_NAME: &str = "backend.sock";
+const MAX_REQUEST_LINE: usize = 256 * 1024;
+const MAX_RESPONSE_LINE: usize = 8 * 1024 * 1024;
 
 #[derive(Deserialize)]
 struct Request {
@@ -45,19 +51,120 @@ fn default_version() -> u8 {
     1
 }
 
-pub fn default_socket_path() -> PathBuf {
-    let runtime = std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| "/tmp".into());
-    PathBuf::from(runtime).join("omakindle").join("backend.sock")
+/// The real uid of this process. `/proc/self` is owned by it, which keeps the
+/// crate free of a direct libc dependency.
+fn current_uid() -> io::Result<u32> {
+    Ok(std::fs::metadata("/proc/self")?.uid())
+}
+
+fn refuse(message: impl Into<String>) -> io::Error {
+    io::Error::new(
+        io::ErrorKind::PermissionDenied,
+        format!(
+            "refusing to use an insecure socket location: {}",
+            message.into()
+        ),
+    )
+}
+
+/// No-follow check that `path` is a real directory owned by this process.
+fn require_dir_owner(path: &Path, uid: u32) -> io::Result<std::fs::Metadata> {
+    let metadata = std::fs::symlink_metadata(path).map_err(|error| {
+        refuse(format!("cannot inspect {}: {error}", path.display()))
+    })?;
+    if !metadata.file_type().is_dir() {
+        return Err(refuse(format!("{} is not a directory", path.display())));
+    }
+    if metadata.uid() != uid {
+        return Err(refuse(format!(
+            "{} is not owned by the current user",
+            path.display()
+        )));
+    }
+    Ok(metadata)
+}
+
+/// No-follow check of a directory the process must own and that other local
+/// users must not be able to modify. `forbidden` selects how much access
+/// group/other are allowed to keep (write bits for the runtime directory,
+/// all bits for the plugin-private directory).
+fn require_private_dir(path: &Path, uid: u32, forbidden: u32) -> io::Result<()> {
+    let metadata = require_dir_owner(path, uid)?;
+    if metadata.mode() & forbidden != 0 {
+        return Err(refuse(format!(
+            "{} is accessible to other local users",
+            path.display()
+        )));
+    }
+    Ok(())
+}
+
+/// Create the plugin-private directory with mode 0700 and verify the result
+/// with no-follow operations. An existing directory is accepted only after a
+/// no-follow type/owner check, is repaired to mode 0700 with a checked chmod,
+/// and is verified again; a symlink, a foreign owner, or a failed chmod
+/// aborts startup.
+fn ensure_private_dir(path: &Path, uid: u32) -> io::Result<()> {
+    match std::fs::symlink_metadata(path) {
+        Ok(_) => {
+            require_dir_owner(path, uid)?;
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            std::fs::DirBuilder::new().mode(0o700).create(path)?;
+        }
+        Err(error) => return Err(error),
+    }
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))?;
+    require_private_dir(path, uid, 0o077)
+}
+
+pub fn default_socket_path() -> io::Result<PathBuf> {
+    let runtime = std::env::var("XDG_RUNTIME_DIR")
+        .map_err(|_| refuse("XDG_RUNTIME_DIR is not set"))?;
+    let runtime = PathBuf::from(runtime);
+    if runtime.as_os_str().is_empty() || !runtime.is_absolute() {
+        return Err(refuse("XDG_RUNTIME_DIR is empty or not an absolute path"));
+    }
+    let uid = current_uid()?;
+    require_private_dir(&runtime, uid, 0o022)?;
+    let dir = runtime.join(APP_DIR);
+    ensure_private_dir(&dir, uid)?;
+    Ok(dir.join(SOCKET_NAME))
 }
 
 pub async fn serve(app: Arc<App>, path: &Path) -> std::io::Result<()> {
-    let _ = std::fs::remove_file(path);
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-        let _ = std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700));
+    let uid = current_uid()?;
+    if !path.is_absolute() {
+        return Err(refuse("socket path is not absolute"));
     }
+    let parent = path
+        .parent()
+        .ok_or_else(|| refuse("socket path has no parent directory"))?;
+    require_private_dir(parent, uid, 0o022)?;
+
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata) => {
+            if !metadata.file_type().is_socket() || metadata.uid() != uid {
+                return Err(refuse(format!(
+                    "{} already exists and is not a user-owned socket",
+                    path.display()
+                )));
+            }
+            std::fs::remove_file(path)?;
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
+    }
+
     let listener = UnixListener::bind(path)?;
-    let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+    let metadata = std::fs::symlink_metadata(path)?;
+    if !metadata.file_type().is_socket()
+        || metadata.uid() != uid
+        || metadata.mode() & 0o777 != 0o600
+    {
+        return Err(refuse("socket permissions could not be verified"));
+    }
 
     let refresh_app = app.clone();
     tokio::spawn(async move {
@@ -94,10 +201,66 @@ pub async fn serve(app: Arc<App>, path: &Path) -> std::io::Result<()> {
 
     loop {
         let (stream, _) = listener.accept().await?;
+        match stream.peer_cred() {
+            Ok(credentials) if credentials.uid() == uid => {}
+            Ok(_) => {
+                eprintln!("omakindle: rejected a connection from another local user");
+                continue;
+            }
+            Err(error) => {
+                eprintln!("omakindle: rejected a connection without peer credentials: {error}");
+                continue;
+            }
+        }
         let app = app.clone();
         tokio::spawn(async move {
             let _ = handle(stream, app).await;
         });
+    }
+}
+
+enum LineRead {
+    Line(String),
+    Eof,
+    TooLong,
+}
+
+/// Read one newline-terminated line while never buffering more than `max`
+/// bytes, so a peer cannot make the backend allocate without bound.
+async fn read_line_bounded<R>(reader: &mut R, max: usize) -> io::Result<LineRead>
+where
+    R: AsyncBufRead + Unpin,
+{
+    let mut buffer: Vec<u8> = Vec::new();
+    loop {
+        let available = reader.fill_buf().await?;
+        if available.is_empty() {
+            if buffer.is_empty() {
+                return Ok(LineRead::Eof);
+            }
+            break;
+        }
+        if let Some(position) = available.iter().position(|byte| *byte == b'\n') {
+            if buffer.len() + position > max {
+                return Ok(LineRead::TooLong);
+            }
+            buffer.extend_from_slice(&available[..position]);
+            reader.consume(position + 1);
+            break;
+        }
+        if buffer.len() + available.len() > max {
+            return Ok(LineRead::TooLong);
+        }
+        let consumed = available.len();
+        buffer.extend_from_slice(available);
+        reader.consume(consumed);
+    }
+    match String::from_utf8(buffer) {
+        Ok(line) => Ok(LineRead::Line(line)),
+        Err(_) => Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "request line is not valid UTF-8",
+        )),
     }
 }
 
@@ -107,6 +270,15 @@ async fn handle(stream: UnixStream, app: Arc<App>) -> std::io::Result<()> {
 
     let write_task = tokio::spawn(async move {
         while let Some(message) = rx.recv().await {
+            let message = if message.len() > MAX_RESPONSE_LINE {
+                error_response(
+                    -1,
+                    "response_too_large",
+                    &format!("responses are limited to {MAX_RESPONSE_LINE} bytes"),
+                )
+            } else {
+                message
+            };
             if writer.write_all(message.as_bytes()).await.is_err() {
                 break;
             }
@@ -142,8 +314,22 @@ async fn handle(stream: UnixStream, app: Arc<App>) -> std::io::Result<()> {
         }
     });
 
-    let mut lines = BufReader::new(reader).lines();
-    while let Some(line) = lines.next_line().await? {
+    let mut reader = BufReader::new(reader);
+    loop {
+        let line = match read_line_bounded(&mut reader, MAX_REQUEST_LINE).await {
+            Ok(LineRead::Eof) => break,
+            Ok(LineRead::Line(line)) => line,
+            Ok(LineRead::TooLong) => {
+                let response = error_response(
+                    -1,
+                    "line_too_long",
+                    &format!("request lines are limited to {MAX_REQUEST_LINE} bytes"),
+                );
+                let _ = tx.send(response).await;
+                break;
+            }
+            Err(error) => return Err(error),
+        };
         let line = line.trim().to_string();
         if line.is_empty() {
             continue;

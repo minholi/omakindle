@@ -1,8 +1,19 @@
 # Backend protocol
 
-The backend listens at `$XDG_RUNTIME_DIR/omakindle/backend.sock`. The socket
-and every message are private to the current user. Transport is UTF-8 JSON,
-one object per line.
+The backend listens at `$XDG_RUNTIME_DIR/omakindle/backend.sock`.
+`XDG_RUNTIME_DIR` must be set to an absolute, user-owned directory that other
+users cannot write to; the backend refuses to start otherwise and never falls
+back to a shared `/tmp` path. The `omakindle` directory is created mode `0700`
+and re-verified with no-follow checks; a symlink, a foreign owner, or a
+group/other-accessible directory aborts startup. The socket is mode `0600`,
+an existing non-socket at the path aborts startup instead of being deleted,
+and connections from other uids are rejected with `SO_PEERCRED`. The sign-in
+helper performs the same checks and verifies the listener's uid before it
+sends cookies or the device token.
+
+Transport is UTF-8 JSON, one object per line. Request lines are limited to
+256 KiB and response lines to 8 MiB; a peer that exceeds its limit is cut off
+with `line_too_long` or `response_too_large`.
 
 A request carries a caller-chosen integer id and a flattened command:
 
@@ -101,7 +112,8 @@ The snapshot contains:
 - `session_error` — the session file could not be read or written
 - `busy` — a refresh is already running
 - `network`, `parse`, `amazon_<status>` — transport, parsing, or Amazon failure
-- `bad_request`, `unknown_command`, `unsupported_version`
+- `bad_request`, `unknown_command`, `unsupported_version`, `line_too_long`,
+  `response_too_large`
 
 ## Notes
 

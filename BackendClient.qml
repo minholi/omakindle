@@ -24,7 +24,8 @@ Item {
 
   readonly property string socketPath: {
     var runtime = Quickshell.env("XDG_RUNTIME_DIR")
-    return String(runtime || "/tmp") + "/omakindle/backend.sock"
+    if (!runtime) return ""
+    return String(runtime) + "/omakindle/backend.sock"
   }
 
   signal stateReceived(var state)
@@ -130,7 +131,7 @@ Item {
     interval: Math.min(2000, 200 + root.reconnectAttempt * 150)
     repeat: true
     triggeredOnStart: true
-    running: root.wanted && !root.connected
+    running: root.wanted && root.socketPath !== "" && !root.connected
     onTriggered: {
       root.reconnectAttempt = Math.min(12, root.reconnectAttempt + 1)
       socketLoader.active = false
